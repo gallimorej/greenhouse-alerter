@@ -1,0 +1,5 @@
+Flask
+gunicorn
+pysensorpush
+google-cloud-secret-manager
+git+https://github.com/DrGFreeman/IFTTT-Webhook.git

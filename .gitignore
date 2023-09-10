@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+
+# Virtual Environments
+venv/
+.env
+
+# IDEs and Editors
+.vscode/
+.idea/
+
+# macOS-specific
+.DS_Store
+
+# Logs and databases
+*.log
+*.sqlite
+
+# Build and package
+build/
+packages/
+
+# Dependency Lock Files
+yarn.lock
+package-lock.json
+
+# Flask-specific
+instance/
+.flaskenv
+
+# Secret files
+*.pem
+*.env.production
+
+#Google Cloud files
+.gcloudignore
