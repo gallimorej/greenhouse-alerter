@@ -35,52 +35,6 @@ def get_secret(secret_id):
 
     return payload
 
-def get_sensorpush_user():
-    # Initialize the Secret Manager client
-    client = secretmanager.SecretManagerServiceClient()
-
-    # Define the name of the secret and the version
-    project_id = os.environ.get('PROJECT_ID')
-    if project_id is None:
-        print(
-            "ERROR! No PROJECT_ID set"
-        )
-    
-    secret_id = "SENSORPUSH_USER"
-    version_id = "latest"  # or a specific version number
-    
-    # Build the resource name of the secret
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
-
-    # Access the secret
-    response = client.access_secret_version(request={"name": name})
-    payload = response.payload.data.decode("UTF-8")
-
-    return payload
-
-def get_sensorpush_pwd():
-    # Initialize the Secret Manager client
-    client = secretmanager.SecretManagerServiceClient()
-
-    # Define the name of the secret and the version
-    project_id = os.environ.get('PROJECT_ID')
-    if project_id is None:
-        print(
-            "ERROR! No PROJECT_ID set"
-        )
-
-    secret_id = "SENSORPUSH_PASSWORD"
-    version_id = "latest"  # or a specific version number
-    
-    # Build the resource name of the secret
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
-
-    # Access the secret
-    response = client.access_secret_version(request={"name": name})
-    payload = response.payload.data.decode("UTF-8")
-
-    return payload
-
 @app.route('/test-sensorpush-connection')
 def test_sensorpush_connection():
     user = get_secret('SENSORPUSH_USER')
