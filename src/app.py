@@ -4,14 +4,13 @@ from flask import Flask
 from google.cloud import secretmanager
 from pysensorpush import PySensorPush
 from ifttt_webhook import IftttWebhook
+from datetime import datetime
 
 import logging
 import os
 import pprint
 
 app = Flask(__name__)
-
-last_reading = None
 
 def get_secret(secret_id):
     # Initialize the Secret Manager client
@@ -35,6 +34,55 @@ def get_secret(secret_id):
 
     return payload
 
+def is_greenhouse_too_hot():
+    user = get_secret('SENSORPUSH_USER')
+    password = get_secret('SENSORPUSH_PASSWORD')
+
+    if None in (user, password):
+        print(
+            "ERROR! Must set SENSORPUSH_USER and SENSORPUSH_PASSWORD"
+        )
+        raise SystemExit
+
+    sensorpush = PySensorPush(user, password)
+
+    greenhousesensorid = os.environ.get('GREENHOUSE_SENSOR_ID')
+    if greenhousesensorid is None:
+        print(
+            "ERROR! Must set GREENHOUSE_SENSOR_ID"
+        )
+        raise SystemExit
+
+    samplelimit = int(os.environ.get('SAMPLE_LIMIT'))
+    if samplelimit is None:
+        samplelimit = 20
+    
+    sensordata=sensorpush.samples(limit=samplelimit)
+    
+    # Getting the samples for the specified sensor
+    samples_for_sensor = sensordata.get('sensors', {}).get(greenhousesensorid, [])
+
+    # Get the latest entry in the list
+    latest_reading = samples_for_sensor[0]
+    
+    temptrigger = float(os.environ.get('TEMPERATURE_TRIGGER'))
+    if temptrigger is None:
+        temptrigger = 110.0
+
+    too_hot = False
+    # Return if the temperature is greater than the trigger
+    if "temperature" in latest_reading:
+        try:
+            temp_from_reading = float(latest_reading["temperature"])
+            too_hot = (temp_from_reading > temptrigger)
+            
+        except ValueError:
+            print("Could not convert temperature to float.")
+    else:
+        print("Temperature key not found in latest_reading.")
+
+    return too_hot
+    
 @app.route('/test-sensorpush-connection')
 def test_sensorpush_connection():
     user = get_secret('SENSORPUSH_USER')
@@ -46,18 +94,8 @@ def test_sensorpush_connection():
         )
         raise SystemExit
 
-    # setup_logger()
-    pp = pprint.PrettyPrinter(indent=2)
-
     sensorpush = PySensorPush(user, password)
 
-    # print("--Gateways--")
-    # pp.pprint(sensorpush.gateways)
-
-    # print("\n--Sensors--")
-    # pp.pprint(sensorpush.sensors)
-
-    # print("\n--Samples--")
     greenhousesensorid = os.environ.get('GREENHOUSE_SENSOR_ID')
     if greenhousesensorid is None:
         print(
@@ -79,25 +117,17 @@ def test_sensorpush_connection():
     # Get the latest entry in the list
     latest_reading = samples_for_sensor[0]
 
-    global last_reading
+    temptrigger = float(os.environ.get('TEMPERATURE_TRIGGER'))
+    if temptrigger is None:
+        temptrigger = 110
 
-    if latest_reading == last_reading:
-        return f"No new readings.\nLatest reading: {latest_reading}\nAll readings: {samples_for_sensor}"
+    # Check if the temperature is greater than the trigger
+    if float(latest_reading["temperature"]) > temptrigger:
+        return f"The most recent temperature in the greenhouse is greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
     else:
-        last_reading = latest_reading
-        
-        temptrigger = float(os.environ.get('TEMPERATURE_TRIGGER'))
-        if temptrigger is None:
-            temptrigger = 110
+        return f"The most recent temperature in the greenhouse is not greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
 
-        # Check if the temperature is greater than the trigger
-        if float(latest_reading["temperature"]) > temptrigger:
-            return f"The most recent temperature in the greenhouse is greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
-        else:
-            return f"The most recent temperature in the greenhouse is not greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
-
-@app.route('/test-ifttt-connection')
-def test_ifttt_connection():
+def start_greenhouse_fans():
     # IFTTT Webhook key, available under "Documentation"
     # at  https://ifttt.com/maker_webhooks/.
     ifttt_key = get_secret('IFTTT_KEY')
@@ -115,12 +145,27 @@ def test_ifttt_connection():
     # defined by the value1, value2 and value3 parameters.
     # ifttt.trigger('greenhouse_temp_triggered', value1='value1', value2='value2', value3='value3')
     ifttt.trigger('greenhouse_temp_triggered')
+
+@app.route('/test-ifttt-connection')
+def test_ifttt_connection():
+    start_greenhouse_fans()
     
     return "The greenhouse fans should be on now."
 
+@app.route('/check-greenhouse-temp')
+def check_greenhouse_temp():
+    # Figure out whether the temp is greater than the threshold
+    # If it is, trigger the greenhouse fans
+    
+    if is_greenhouse_too_hot():
+        start_greenhouse_fans()
+    
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return f"Checked greenhouse temperature at {current_time}"
+
 @app.route('/')
 def hello():
-    return "Hello World!"
+    return "Yo! This is the Greenhouse Alerter."
     
 if __name__ == '__main__':
     app.run()

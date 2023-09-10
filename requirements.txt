@@ -2,4 +2,4 @@ Flask
 gunicorn
 pysensorpush
 google-cloud-secret-manager
-git+https://github.com/DrGFreeman/IFTTT-Webhook.git
+git+https://github.com/gallimorej/IFTTT-Webhook.git
