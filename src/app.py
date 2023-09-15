@@ -127,7 +127,7 @@ def test_sensorpush_connection():
     else:
         return f"The most recent temperature in the greenhouse is not greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
 
-def start_greenhouse_fans():
+def toggle_greenhouse_fans(event_name):
     # IFTTT Webhook key, available under "Documentation"
     # at  https://ifttt.com/maker_webhooks/.
     ifttt_key = get_secret('IFTTT_KEY')
@@ -144,7 +144,13 @@ def start_greenhouse_fans():
     # Trigger the IFTTT event defined by event_name with the content
     # defined by the value1, value2 and value3 parameters.
     # ifttt.trigger('greenhouse_temp_triggered', value1='value1', value2='value2', value3='value3')
-    ifttt.trigger('greenhouse_temp_triggered')
+    ifttt.trigger(event_name)
+
+def start_greenhouse_fans():
+    toggle_greenhouse_fans('greenhouse_temp_over_limit')
+    
+def stop_greenhouse_fans():
+    toggle_greenhouse_fans('greenhouse_temp_under_limit')
 
 @app.route('/test-ifttt-connection')
 def test_ifttt_connection():
@@ -159,6 +165,8 @@ def check_greenhouse_temp():
     
     if is_greenhouse_too_hot():
         start_greenhouse_fans()
+    else:
+        stop_greenhouse_fans()
     
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     return f"Checked greenhouse temperature at {current_time}"
