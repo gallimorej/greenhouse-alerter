@@ -34,98 +34,68 @@ def get_secret(secret_id):
 
     return payload
 
-def is_greenhouse_too_hot():
+def get_latest_reading():
     user = get_secret('SENSORPUSH_USER')
     password = get_secret('SENSORPUSH_PASSWORD')
 
     if None in (user, password):
-        print(
-            "ERROR! Must set SENSORPUSH_USER and SENSORPUSH_PASSWORD"
-        )
+        print("ERROR! Must set SENSORPUSH_USER and SENSORPUSH_PASSWORD")
         raise SystemExit
 
     sensorpush = PySensorPush(user, password)
-
     greenhousesensorid = os.environ.get('GREENHOUSE_SENSOR_ID')
+    
     if greenhousesensorid is None:
-        print(
-            "ERROR! Must set GREENHOUSE_SENSOR_ID"
-        )
+        print("ERROR! Must set GREENHOUSE_SENSOR_ID")
         raise SystemExit
 
-    samplelimit = int(os.environ.get('SAMPLE_LIMIT'))
-    if samplelimit is None:
-        samplelimit = 20
-    
-    sensordata=sensorpush.samples(limit=samplelimit)
-    
-    # Getting the samples for the specified sensor
+    samplelimit = int(os.environ.get('SAMPLE_LIMIT', 20))
+    sensordata = sensorpush.samples(limit=samplelimit)
     samples_for_sensor = sensordata.get('sensors', {}).get(greenhousesensorid, [])
-
-    # Get the latest entry in the list
     latest_reading = samples_for_sensor[0]
-    
-    temptrigger = float(os.environ.get('TEMPERATURE_TRIGGER'))
-    if temptrigger is None:
-        temptrigger = 110.0
 
-    too_hot = False
-    # Return if the temperature is greater than the trigger
+    return latest_reading
+
+def is_greenhouse_too_hot():
+    latest_reading = get_latest_reading()
+    temptrigger = float(os.environ.get('TEMPERATURE_HIGH_TRIGGER', 100.0))
     if "temperature" in latest_reading:
         try:
-            temp_from_reading = float(latest_reading["temperature"])
-            too_hot = (temp_from_reading > temptrigger)
-            
+            return float(latest_reading["temperature"]) > temptrigger
         except ValueError:
             print("Could not convert temperature to float.")
+            return False
     else:
         print("Temperature key not found in latest_reading.")
+        return False
 
-    return too_hot
+def is_greenhouse_cool_enough():
+    latest_reading = get_latest_reading()
+    temptrigger = float(os.environ.get('TEMPERATURE_LOW_TRIGGER', 90.0))
+    if "temperature" in latest_reading:
+        try:
+            return float(latest_reading["temperature"]) < temptrigger
+        except ValueError:
+            print("Could not convert temperature to float.")
+            return False
+    else:
+        print("Temperature key not found in latest_reading.")
+        return False
     
 @app.route('/test-sensorpush-connection')
 def test_sensorpush_connection():
-    user = get_secret('SENSORPUSH_USER')
-    password = get_secret('SENSORPUSH_PASSWORD')
+    latest_reading = get_latest_reading()
+    temptrigger = float(os.environ.get('TEMPERATURE_HIGH_TRIGGER', 100.0))
 
-    if None in (user, password):
-        print(
-            "ERROR! Must set SENSORPUSH_USER and SENSORPUSH_PASSWORD"
-        )
-        raise SystemExit
+    if "temperature" in latest_reading:
+        try:
+            latest_temp = float(latest_reading["temperature"])
 
-    sensorpush = PySensorPush(user, password)
-
-    greenhousesensorid = os.environ.get('GREENHOUSE_SENSOR_ID')
-    if greenhousesensorid is None:
-        print(
-            "ERROR! Must set GREENHOUSE_SENSOR_ID"
-        )
-        raise SystemExit
-
-    samplelimit = int(os.environ.get('SAMPLE_LIMIT'))
-    if samplelimit is None:
-        samplelimit = 20
-    
-    # pp.pprint(sensorpush.samples({'sensors': [greenhouseSensor]}))
-    sensordata=sensorpush.samples(limit=samplelimit)
-    # pp.pprint(sensorpush.samples(limit=20))
-
-    # Getting the samples for the specified sensor
-    samples_for_sensor = sensordata.get('sensors', {}).get(greenhousesensorid, [])
-
-    # Get the latest entry in the list
-    latest_reading = samples_for_sensor[0]
-
-    temptrigger = float(os.environ.get('TEMPERATURE_TRIGGER'))
-    if temptrigger is None:
-        temptrigger = 110
-
-    # Check if the temperature is greater than the trigger
-    if float(latest_reading["temperature"]) > temptrigger:
-        return f"The most recent temperature in the greenhouse is greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
+            return f"The most recent temperature in the greenhouse is {latest_temp}.\nLatest reading: {latest_reading}"
+        except ValueError:
+            return "Could not convert the temperature to a float."
     else:
-        return f"The most recent temperature in the greenhouse is not greater than {temptrigger}.\nLatest entry: {latest_reading}\nAll readings: {samples_for_sensor}"
+        return "Temperature key not found in latest_reading."
 
 def toggle_greenhouse_fans(event_name):
     # IFTTT Webhook key, available under "Documentation"
@@ -165,7 +135,8 @@ def check_greenhouse_temp():
     
     if is_greenhouse_too_hot():
         start_greenhouse_fans()
-    else:
+    
+    if is_greenhouse_cool_enough():
         stop_greenhouse_fans()
     
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
