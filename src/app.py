@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from flask import Flask
+from flask import Flask, jsonify
 from google.cloud import secretmanager
 from pysensorpush import PySensorPush
 from ifttt_webhook import IftttWebhook
@@ -19,9 +19,7 @@ def get_secret(secret_id):
     # Define the name of the secret and the version
     project_id = os.environ.get('PROJECT_ID')
     if project_id is None:
-        print(
-            "ERROR! No PROJECT_ID set"
-        )
+        return jsonify({'message': 'Missing PROJECT_ID'}), 500
     
     version_id = "latest"  # or a specific version number
     
@@ -39,8 +37,7 @@ def get_latest_reading():
     password = get_secret('SENSORPUSH_PASSWORD')
 
     if None in (user, password):
-        print("ERROR! Must set SENSORPUSH_USER and SENSORPUSH_PASSWORD")
-        raise SystemExit
+        return jsonify({'message': 'Missing SENSORPUSH_USER and SENSORPUSH_PASSWORD'}), 500
 
     sensorpush = PySensorPush(user, password)
     greenhousesensorid = os.environ.get('GREENHOUSE_SENSOR_ID')

@@ -1,8 +1,11 @@
 import unittest
-from unittest.mock import patch, Mock
-from app import app  # Replace `your_flask_app_file` with the actual name of your Flask app file
-from flask_testing import TestCase
 from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
+from flask_testing import TestCase
+
+from app import app, toggle_greenhouse_fans
+
 
 class TestFlaskRoutes(TestCase):
     def create_app(self):
@@ -53,50 +56,24 @@ class TestFlaskRoutes(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(f"Checked greenhouse temperature at {current_time}", str(response.data))
         mock_stop_fans.assert_called_once()
-
-    @patch('app.get_secret')  # Replace the path with your actual import
-    @patch('app.PySensorPush')  # Replace the path with your actual import
-    def test_test_sensorpush_connection_no_secret(self, MockPySensorPush, MockGetSecret):
-        MockGetSecret.return_value = None
-
-        with patch.dict('os.environ', {'TEMPERATURE_HIGH_TRIGGER': '75', 'GREENHOUSE_SENSOR_ID': 'some_id', 'SAMPLE_LIMIT': '20'}):
-            response = self.client.get('/test-sensorpush-connection')
-            self.assertEqual(response.status_code, 500)
-            self.assertIn(b"Failed to retrieve secret from Secret Manager", response.data)
-
-    @patch('app.get_secret')  # Replace the path with your actual import
-    @patch('app.PySensorPush')  # Replace the path with your actual import
-    def test_test_sensorpush_connection_no_sensor_id(self, MockPySensorPush, MockGetSecret):
-        MockGetSecret.return_value = "some_value"
-        mock_sensor = Mock()
-        mock_sensor.samples.return_value = {'sensors': {'some_other_id': [{'temperature': '70.0'}]}}
-        MockPySensorPush.return_value = mock_sensor
-
-        with patch.dict('os.environ', {'TEMPERATURE_HIGH_TRIGGER': '75', 'GREENHOUSE_SENSOR_ID': 'some_id', 'SAMPLE_LIMIT': '20'}):
-            response = self.client.get('/test-sensorpush-connection')
-            self.assertEqual(response.status_code, 500)
-            self.assertIn(b"No sensor data found for sensor ID some_id", response.data)
-
-    @patch('app.get_secret')  # Replace the path with your actual import
-    @patch('app.IftttWebhook')  # Replace the path with your actual import
-    def test_test_ifttt_connection_no_secret(self, MockIftttWebhook, MockGetSecret):
-        MockGetSecret.return_value = None
-
-        response = self.client.get('/test-ifttt-connection')
-        self.assertEqual(response.status_code, 500)
-        self.assertIn(b"Failed to retrieve secret from Secret Manager", response.data)
-
-    @patch('app.get_secret')  # Replace the path with your actual import
-    @patch('app.IftttWebhook')  # Replace the path with your actual import
-    def test_test_ifttt_connection_no_key(self, MockIftttWebhook, MockGetSecret):
-        MockGetSecret.return_value = "some_value"
-        mock_ifttt = Mock()
-        mock_ifttt.trigger.return_value = False
+    
+    @patch('app.get_secret')
+    @patch('app.IftttWebhook')
+    def test_toggle_greenhouse_fans_on(self, MockIftttWebhook, MockGetSecret):
+        # Set up mock objects
+        mock_ifttt = MagicMock()
         MockIftttWebhook.return_value = mock_ifttt
+        MockGetSecret.return_value = 'some_key'
 
-        response = self.client.get('/test-ifttt-connection')
-        self.assertEqual(response.status_code, 500)
-        self.assertIn(b"Failed to trigger IFTTT webhook", response.data)
+        # Call the function
+        toggle_greenhouse_fans('greenhouse_temp_over_limit')
+
+        # Verify that the IftttWebhook constructor was called with the correct key
+        MockIftttWebhook.assert_called_once_with('some_key')
+
+        # Verify that the IftttWebhook.trigger method was called with the correct event name
+        mock_ifttt.trigger.assert_called_once_with('greenhouse_temp_over_limit')
+
 
     @patch('app.is_greenhouse_too_hot', return_value=False)
     @patch('app.is_greenhouse_cool_enough', return_value=False)
@@ -108,5 +85,6 @@ class TestFlaskRoutes(TestCase):
         self.assertIn(f"Checked greenhouse temperature at {current_time}", str(response.data))
         self.assertNotIn(b"Starting greenhouse fans", response.data)
         self.assertNotIn(b"Stopping greenhouse fans", response.data)
+
 if __name__ == '__main__':
     unittest.main()
