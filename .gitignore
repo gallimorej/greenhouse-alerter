@@ -35,6 +35,7 @@ instance/
 # Secret files
 *.pem
 *.env.production
+greenhouse-alerter-ea44157e7277.json
 
 #Google Cloud files
 .gcloudignore
