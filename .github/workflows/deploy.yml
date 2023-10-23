@@ -10,15 +10,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
       with:
         project_id: greenhouse-alerter
         service_account_key: ${{ secrets.GCP_SA_KEY }}
         export_default_credentials: true
+
+
+
+
+
+  job_id:
+    # Add "id-token" with the intended permissions.
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        service_account: 'greenhouse-alerter@appspot.gserviceaccount.com'
+
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v1'
+      with:
+        version: '>= 363.0.0'
+        project_id: greenhouse-alerter
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        export_default_credentials: true
+
+
+    - name: 'Use gcloud CLI'
+      run: 'gcloud info'
 
     - name: Deploy to App Engine
       run: |
