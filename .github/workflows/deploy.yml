@@ -55,6 +55,26 @@ jobs:
       run: terraform init
       working-directory: ./terraform
 
+    - name: Terraform Import
+      run: |
+        export TF_VAR_project_id=$TF_VAR_PROJECT_ID
+        export TF_VAR_region=$TF_VAR_REGION
+        export TF_VAR_service_account_email=$TF_VAR_SERVICE_ACCOUNT_EMAIL
+        export TF_VAR_temp_check_job_uri=$TF_VAR_TEMP_CHECK_JOB_URI
+        export TF_VAR_start_fan_cycle_job_uri=$TF_VAR_START_FAN_CYCLE_JOB_URI
+        export TF_VAR_stop_fan_cycle_job_uri=$TF_VAR_STOP_FAN_CYCLE_JOB_URI
+        terraform import google_cloud_scheduler_job.greenhouse-temp-check projects/$TF_VAR_project_id/locations/$TF_VAR_region/jobs/greenhouse-temp-check || true
+        terraform import google_cloud_scheduler_job.start-greenhouse-fan-cycle projects/$TF_VAR_project_id/locations/$TF_VAR_region/jobs/start-greenhouse-fan-cycle || true
+        terraform import google_cloud_scheduler_job.stop-greenhouse-fan-cycle projects/$TF_VAR_project_id/locations/$TF_VAR_region/jobs/stop-greenhouse-fan-cycle || true
+      env:
+        TF_VAR_PROJECT_ID: '${{ secrets.TF_VAR_PROJECT_ID }}'
+        TF_VAR_REGION: '${{ secrets.TF_VAR_REGION }}'
+        TF_VAR_SERVICE_ACCOUNT_EMAIL: '${{ secrets.TF_VAR_SERVICE_ACCOUNT_EMAIL }}'
+        TF_VAR_TEMP_CHECK_JOB_URI: '${{ secrets.TF_VAR_TEMP_CHECK_JOB_URI }}'
+        TF_VAR_START_FAN_CYCLE_JOB_URI: '${{ secrets.TF_VAR_START_FAN_CYCLE_JOB_URI }}'
+        TF_VAR_STOP_FAN_CYCLE_JOB_URI: '${{ secrets.TF_VAR_STOP_FAN_CYCLE_JOB_URI }}'
+      working-directory: ./terraform
+
     - name: Terraform Plan
       run: |
         export TF_VAR_project_id=$TF_VAR_PROJECT_ID
