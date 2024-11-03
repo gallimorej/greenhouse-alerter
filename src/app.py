@@ -94,7 +94,7 @@ def test_sensorpush_connection():
     else:
         return "Temperature key not found in latest_reading."
 
-def toggle_greenhouse_fans(event_name):
+def call_ifttt_webhook(event_name):
     # IFTTT Webhook key, available under "Documentation"
     # at  https://ifttt.com/maker_webhooks/.
     ifttt_key = get_secret('IFTTT_KEY')
@@ -114,10 +114,10 @@ def toggle_greenhouse_fans(event_name):
     ifttt.trigger(event_name)
 
 def start_greenhouse_fans():
-    toggle_greenhouse_fans('greenhouse_temp_over_limit')
+    call_ifttt_webhook('start_greenhouse_fans')
     
 def stop_greenhouse_fans():
-    toggle_greenhouse_fans('greenhouse_temp_under_limit')
+    call_ifttt_webhook('stop_greenhouse_fans')
 
 @app.route('/test-ifttt-connection')
 def test_ifttt_connection():
