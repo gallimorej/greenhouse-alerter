@@ -113,11 +113,22 @@ def call_ifttt_webhook(event_name):
     # ifttt.trigger('greenhouse_temp_triggered', value1='value1', value2='value2', value3='value3')
     ifttt.trigger(event_name)
 
+@app.route('/start-greenhouse-fans')
+@app.route('/start-greenhouse-fan-cycle')
 def start_greenhouse_fans():
     call_ifttt_webhook('start_greenhouse_fans')
-    
+
+@app.route('/stop-greenhouse-fans')    
 def stop_greenhouse_fans():
     call_ifttt_webhook('stop_greenhouse_fans')
+    
+@app.route('/stop-greenhouse-fan-cycle')    
+def stop_greenhouse_fan_cycle():
+    if is_greenhouse_cool_enough():
+        stop_greenhouse_fans()
+        return "The greenhouse is cool enough. The fans should be off now."
+    else:
+        return "The greenhouse is not cool enough. The fans will remain on."
 
 @app.route('/test-ifttt-connection')
 def test_ifttt_connection():
