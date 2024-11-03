@@ -57,7 +57,7 @@ jobs:
 
     - name: Terraform Plan
       run: |
-        export PROJECT_ID=$TF_VAR_PROJECT_ID
+        export TF_VAR_project_id=$TF_VAR_PROJECT_ID
         terraform plan
       env:
         TF_VAR_PROJECT_ID: '${{ secrets.TF_VAR_PROJECT_ID }}'
