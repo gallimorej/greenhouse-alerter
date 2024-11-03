@@ -11,6 +11,8 @@ import os
 import pprint
 
 app = Flask(__name__)
+fan_start_event_name = os.environ.get('FAN_START_EVENT_NAME', 'start_greenhouse_fans')
+fan_stop_event_name = os.environ.get('FAN_STOP_EVENT_NAME', 'stop_greenhouse_fans')
 
 def get_secret(secret_id):
     # Initialize the Secret Manager client
@@ -116,13 +118,13 @@ def call_ifttt_webhook(event_name):
 @app.route('/start-greenhouse-fans')
 @app.route('/start-greenhouse-fan-cycle')
 def start_greenhouse_fans():
-    call_ifttt_webhook('start_greenhouse_fans')
+    call_ifttt_webhook(fan_start_event_name)
     
     return "The greenhouse fans should be on now."
 
 @app.route('/stop-greenhouse-fans')    
 def stop_greenhouse_fans():
-    call_ifttt_webhook('stop_greenhouse_fans')
+    call_ifttt_webhook(fan_stop_event_name)
     
     return "The greenhouse fans should be off now."
     

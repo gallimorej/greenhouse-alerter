@@ -8,3 +8,5 @@ env_variables:
   SAMPLE_LIMIT: 20
   TEMPERATURE_HIGH_TRIGGER: 100
   TEMPERATURE_LOW_TRIGGER: 90
+  FAN_START_EVENT_NAME: "start_greenhouse_fans"
+  FAN_STOP_EVENT_NAME: "stop_greenhouse_fans"
