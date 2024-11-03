@@ -117,10 +117,14 @@ def call_ifttt_webhook(event_name):
 @app.route('/start-greenhouse-fan-cycle')
 def start_greenhouse_fans():
     call_ifttt_webhook('start_greenhouse_fans')
+    
+    return "The greenhouse fans should be on now."
 
 @app.route('/stop-greenhouse-fans')    
 def stop_greenhouse_fans():
     call_ifttt_webhook('stop_greenhouse_fans')
+    
+    return "The greenhouse fans should be off now."
     
 @app.route('/stop-greenhouse-fan-cycle')    
 def stop_greenhouse_fan_cycle():
