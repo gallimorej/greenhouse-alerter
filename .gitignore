@@ -39,3 +39,9 @@ greenhouse-alerter-ea44157e7277.json
 
 #Google Cloud files
 .gcloudignore
+
+# Terraform files
+terraform.tfvars
+*.tfstate
+*.tfstate.backup
+.terraform/
