@@ -50,7 +50,14 @@
       {{ field("ifttt_on_event", "On event", config.ifttt_on_event, type="text") }}
       {{ field("ifttt_off_event", "Off event", config.ifttt_off_event, type="text") }}
       {{ field("reassert_after_minutes", "Resend the current state every (min)", (config.reassert_after.total_seconds() / 60)|int, hint="In case the switch was changed by hand.") }}
-      {{ field("sensorpush_admin_calls_per_minute", "SensorPush calls per minute for these pages", config.sensorpush_admin_calls_per_minute) }}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>SensorPush</h2>
+    <div class="fields">
+      {{ field("sensor_poll_minutes", "Fetch a new reading every (min)", (config.sensor_poll_interval.total_seconds() / 60)|int, hint="The admin pages use the time between fetches.") }}
+      {{ field("sensorpush_calls_per_minute", "API requests allowed per minute", config.sensorpush_calls_per_minute, hint="Shared by the fan controller and these pages. SensorPush asks for no more than 1.") }}
     </div>
   </section>
 

@@ -20,6 +20,7 @@ greenhouse-admin    Cloud Run behind IAP; status, kill switch, reconcile, sensor
 - **Decision rules:** `src/greenhouse/controller.py`, a pure function covering thresholds with hysteresis, active hours, the hourly cycle, stale readings, the startup baseline and manual overrides.
 - **Command safety:** `actuation.py` handles the lease, generations, the pre-dispatch guard and reconcile. A tick that has lost its lease or outlived its budget can't send, and flipping the kill switch stops even a tick already in flight.
 - **Persistence:** `store.py` runs every transition in one transaction, on Firestore in production and in memory in tests.
+- **SensorPush limit:** SensorPush asks for no more than one API request a minute, so both services share one call in any rolling 60 seconds (`sensorpush/budget`), and each granted call is a single HTTP attempt. The worker fetches a sample every 3 minutes and reuses it in between; admin pages get the gap between fetches, cache the sensor and gateway lists, and confirming a sensor link reuses its test reading. Logins aren't counted: two requests per service every 30 minutes, or sooner when SensorPush rejects an expired token. The rejected request isn't repeated; it waits for the next granted call.
 - **Failure handling:** a sensor failure leaves the fans as they are and raises an email alert (`terraform/monitoring.tf`).
 
 New deployments start in **shadow mode**: decisions are computed and logged, but no commands are sent until fan control is enabled on the admin page.
@@ -62,10 +63,11 @@ pip-compile --generate-hashes --strip-extras --allow-unsafe -o requirements-dev.
 
 ### Go live
 1. Deploy. Fan control starts disabled, in shadow mode.
-2. Add the sensor to the SensorPush account in the SensorPush app, within range of a gateway.
-3. Admin → **Sensors** → **Link…**, check the live reading, then **Confirm**.
-4. Watch the shadow decisions on the Status page for at least a day. Check that both IFTTT applets set the switch on or off (rather than toggling it).
-5. **Enable fan control**, then force-run the job (`gcloud scheduler jobs run greenhouse-tick --location us-east1`) and confirm the event and the fans.
+2. Check admin access: open the admin URL in a private window and sign in with the admin account; it should load. A Google account that isn't allowed should get 403. This is also the first check of the IAP token audience; if the admin account gets 403 too, fix the audience before going on.
+3. Add the sensor to the SensorPush account in the SensorPush app, within range of a gateway.
+4. Admin → **Sensors** → **Link…**, check the live reading, then **Confirm**.
+5. Watch the shadow decisions on the Status page for at least a day. Check that both IFTTT applets set the switch on or off (rather than toggling it).
+6. **Enable fan control**, then force-run the job (`gcloud scheduler jobs run greenhouse-tick --location us-east1`) and confirm the event and the fans.
 
 ### Rollback: stop automation and run the fans by hand
 1. Pause the job: `gcloud scheduler jobs pause greenhouse-tick --location us-east1` (and set `tick_paused = true` in Terraform so the next deploy doesn't resume it).

@@ -11,7 +11,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from greenhouse import actuation, appconfig
 from greenhouse.actuation import Dispatch, SendCheck
@@ -23,7 +23,15 @@ OVERRIDE = "config/override"
 CONTROLLER = "controller/state"
 STATUS = "controller/status"
 BUDGET = "sensorpush/budget"
+LINK_CHECK = "sensorpush/link_check"
 EVENTS = "events"
+
+BUDGET_WINDOW = timedelta(seconds=60)
+# Ticks run about a minute apart, so a fetch is due slightly before a full interval has passed.
+POLL_SLACK = timedelta(seconds=15)
+# If the worker hasn't fetched for this long past its interval (no sensor linked, job paused), it
+# isn't running, and the admin pages stop yielding to it.
+WORKER_IDLE_AFTER = timedelta(minutes=2)
 
 Docs = dict[str, dict | None]
 Writes = dict[str, dict]
@@ -130,21 +138,43 @@ class Store:
     # --- SensorPush call budget -------------------------------------------------------------
 
     def consume_sensorpush_call(self, caller: str, now: datetime) -> bool:
-        """Count a call in the current minute. The worker always may; admin pages share a cap."""
+        """Take one SensorPush call from the shared cap, if it's this caller's turn.
+
+        The cap counts calls in any rolling 60 seconds, not per clock minute. The worker may call
+        only once its poll interval has passed. While the worker is running, an admin call that
+        would leave no room for the worker's next fetch is refused, so admin pages can't starve the
+        controller of readings.
+        """
 
         def write(d):
-            minute = now.strftime("%Y-%m-%dT%H:%M")
-            budget = d[BUDGET] if d[BUDGET] and d[BUDGET].get("minute") == minute else {
-                "minute": minute, "worker": 0, "admin": 0
-            }
-            if caller == "admin":
-                cap = appconfig.from_dict(d[CONFIG]).sensorpush_admin_calls_per_minute
-                if budget["admin"] >= cap:
+            config = appconfig.from_dict(d[CONFIG])
+            budget = d[BUDGET] or {}
+            recent = [t for t in budget.get("recent", []) if now - t < BUDGET_WINDOW]
+            if len(recent) >= config.sensorpush_calls_per_minute:
+                return {}, False
+            last_worker = budget.get("last_worker_at")
+            since = None if last_worker is None else now - last_worker
+            worker_due = since is None or since >= config.sensor_poll_interval - POLL_SLACK
+            if caller == "worker" and not worker_due:
+                return {}, False
+            worker_running = since is not None and since < config.sensor_poll_interval + WORKER_IDLE_AFTER
+            if caller == "admin" and worker_running:
+                next_fetch = last_worker + config.sensor_poll_interval - POLL_SLACK
+                fills_cap = len(recent) + 1 >= config.sensorpush_calls_per_minute
+                if fills_cap and next_fetch - now < BUDGET_WINDOW:
                     return {}, False
-            budget = dict(budget, **{caller: budget[caller] + 1})
+            budget = {
+                "recent": recent + [now],
+                "last_worker_at": now if caller == "worker" else last_worker,
+            }
             return {BUDGET: budget}, True
 
         return self._transact([BUDGET, CONFIG], write)
+
+    def record_link_check(self, sensor_id: str, reading: dict, actor: str, now: datetime) -> None:
+        """Remember a passed link test, so confirming it doesn't spend another SensorPush call."""
+        doc = {"sensor_id": sensor_id, "reading": reading, "actor": actor, "checked_at": now}
+        self._transact([], lambda d: ({LINK_CHECK: doc}, None))
 
     # --- worker tick ------------------------------------------------------------------------
 

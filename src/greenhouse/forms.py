@@ -56,7 +56,10 @@ def parse_settings(form, current: AppConfig) -> tuple[AppConfig | None, dict[str
     }
     stale = _int(form, "stale_after_minutes", errors, 5, 240)
     reassert = _int(form, "reassert_after_minutes", errors, 5, 720)
-    admin_calls = _int(form, "sensorpush_admin_calls_per_minute", errors, 1, 20)
+    calls = _int(form, "sensorpush_calls_per_minute", errors, 1, 10)
+    poll = _int(form, "sensor_poll_minutes", errors, 1, 30)
+    if poll is not None and stale is not None and poll >= stale:
+        errors["sensor_poll_minutes"] = "Must be shorter than the time a reading counts as stale."
     on_event = form.get("ifttt_on_event", "").strip()
     off_event = form.get("ifttt_off_event", "").strip()
     for name, event in (("ifttt_on_event", on_event), ("ifttt_off_event", off_event)):
@@ -76,7 +79,8 @@ def parse_settings(form, current: AppConfig) -> tuple[AppConfig | None, dict[str
         reassert_after=timedelta(minutes=reassert),
         ifttt_on_event=on_event,
         ifttt_off_event=off_event,
-        sensorpush_admin_calls_per_minute=admin_calls,
+        sensorpush_calls_per_minute=calls,
+        sensor_poll_interval=timedelta(minutes=poll),
     ), {}
 
 

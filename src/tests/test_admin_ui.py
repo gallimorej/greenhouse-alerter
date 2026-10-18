@@ -65,7 +65,7 @@ SETTINGS_FORM = {
     "cycle_interval_minutes": "60", "cycle_offset_minutes": "10", "cycle_duration_minutes": "3",
     "stale_after_minutes": "15", "reassert_after_minutes": "45",
     "ifttt_on_event": "start_greenhouse_fans", "ifttt_off_event": "stop_greenhouse_fans",
-    "sensorpush_admin_calls_per_minute": "4",
+    "sensorpush_calls_per_minute": "1", "sensor_poll_minutes": "4",
 }
 
 
@@ -77,6 +77,7 @@ def test_parse_settings_builds_new_config():
     assert new.controller.high_f == 98 and new.controller.active_start == time(6, 30)
     assert new.controller.stale_after == timedelta(minutes=15)
     assert new.reassert_after == timedelta(minutes=45)
+    assert new.sensorpush_calls_per_minute == 1 and new.sensor_poll_interval == timedelta(minutes=4)
 
 
 @pytest.mark.parametrize(
@@ -88,6 +89,8 @@ def test_parse_settings_builds_new_config():
         ({"cycle_duration_minutes": "2.5"}, "cycle_duration_minutes"),
         ({"ifttt_on_event": "bad event!"}, "ifttt_on_event"),
         ({"ifttt_off_event": "start_greenhouse_fans"}, "ifttt_off_event"),
+        ({"sensorpush_calls_per_minute": "0"}, "sensorpush_calls_per_minute"),
+        ({"sensor_poll_minutes": "15"}, "sensor_poll_minutes"),  # not shorter than stale_after
     ],
 )
 def test_parse_settings_field_errors(changes, field):
@@ -237,6 +240,7 @@ def test_history_is_cached_for_five_minutes(admin, sensors, clock):
     clock.advance(minutes=6)
     admin.get("/admin/history", headers=ADMIN)
     assert sensors.calls == calls + 1
+    assert all(p.attempts == 1 and not p.reauth_retry for p in sensors.policies)
 
 
 def test_history_rejects_unknown_range(admin):
@@ -305,6 +309,9 @@ def test_history_client_sends_start_time_only_and_sorts_oldest_first():
         json={"truncated": False, "sensors": {"s1": [
             {"observed": "2026-07-15T16:10:00.000Z", "temperature": 81},
             {"observed": "2026-07-15T16:00:00.000Z", "temperature": "bad"},
+            {"observed": None, "temperature": 90},
+            {"observed": "2026-07-15T15:55:00", "temperature": 90},
+            "not-a-sample",
             {"observed": "2026-07-15T15:50:00.000Z", "temperature": 79},
         ]}},
         match=[responses.matchers.json_params_matcher(

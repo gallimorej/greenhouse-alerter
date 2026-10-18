@@ -1,7 +1,8 @@
 """One controller tick: the only code path that sends fan commands.
 
 1. acquire the lease (txn), getting the current config
-2. read the linked sensor, outside any transaction
+2. read the linked sensor, outside any transaction, when its poll interval is due; otherwise reuse
+   the last sample (SensorPush allows one request a minute, shared with the admin pages)
 3. plan (txn): decide, then record state, status and, if due, a pending command
 4. guard (txn): refuse unless the lease, budget, kill switch and generation all still hold
 5. call IFTTT, outside any transaction
@@ -22,7 +23,7 @@ from greenhouse.actuation import LeaseHeld, LeaseLost
 from greenhouse.fans import IftttClient, IftttError
 from greenhouse.models import Reading
 from greenhouse.sensors import CallPolicy, SensorSource, SensorUnavailable
-from greenhouse.store import Store
+from greenhouse.store import STATUS, Store
 
 log = logging.getLogger(__name__)
 
@@ -52,10 +53,13 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _reading_status(reading: Reading | None, sensor_id: str | None, error: str | None) -> dict:
+def _reading_status(
+    reading: Reading | None, sensor_id: str | None, error: str | None, fetched_at: datetime | None
+) -> dict:
     return {
         "sensor_id": sensor_id,
         "sensor_error": error,
+        "sensor_fetched_at": fetched_at,
         "reading": None if reading is None else {
             "observed_at": reading.observed_at,
             "temperature_f": reading.temperature_f,
@@ -63,6 +67,21 @@ def _reading_status(reading: Reading | None, sensor_id: str | None, error: str |
             "pressure": reading.pressure,
         },
     }
+
+
+def _previous_reading(status: dict, sensor_id: str) -> tuple[Reading | None, str | None, datetime | None]:
+    """The last tick's reading for this sensor, to reuse between fetches."""
+    if status.get("sensor_id") != sensor_id or "sensor_fetched_at" not in status:
+        return None, "waiting for the first SensorPush fetch", None
+    data = status.get("reading")
+    reading = None if data is None else Reading(
+        sensor_id=sensor_id,
+        observed_at=data["observed_at"],
+        temperature_f=data["temperature_f"],
+        humidity=data.get("humidity"),
+        pressure=data.get("pressure"),
+    )
+    return reading, status.get("sensor_error"), status.get("sensor_fetched_at")
 
 
 def run_tick(
@@ -83,29 +102,35 @@ def run_tick(
         return TickResult("skipped", {"holder": str(held)})
 
     try:
-        reading, error = None, None
+        reading, error, fetched_at, fetched = None, None, None, False
         sensor_id = config.active_sensor_id
         if sensor_id is None:
             error = "no sensor linked"
         elif deadline.remaining() < 1:
             error = "execution budget exhausted before sensor read"
-        else:
-            store.consume_sensorpush_call("worker", now())
-            policy = CallPolicy(timeout_s=min(SENSOR_TIMEOUT_S, deadline.remaining() - 1), attempts=1)
+        elif store.consume_sensorpush_call("worker", now()):
+            fetched, fetched_at = True, now()
+            policy = CallPolicy(
+                timeout_s=min(SENSOR_TIMEOUT_S, deadline.remaining() - 1), attempts=1, reauth_retry=False
+            )
             try:
                 reading = sensors.latest_reading(sensor_id, policy)
             except SensorUnavailable as exc:
                 error = str(exc)
+        else:
+            reading, error, fetched_at = _previous_reading(store.read_raw(STATUS) or {}, sensor_id)
 
         def decide(cfg, state, override):
             return controller.decide(now(), cfg.controller, reading, state, override)
 
-        plan = store.tick_plan(tick_id, now(), decide, _reading_status(reading, sensor_id, error))
+        status = _reading_status(reading, sensor_id, error, fetched_at)
+        plan = store.tick_plan(tick_id, now(), decide, status)
         detail = {
             "event": "tick",
             "tick_id": tick_id,
             "sensor_id": sensor_id,
             "sensor_error": error,
+            "sensor_fetched": fetched,
             "temperature_f": reading.temperature_f if reading else None,
             "sensor_fresh": plan.decision.sensor_fresh,
             "desired_on": plan.decision.desired_on,

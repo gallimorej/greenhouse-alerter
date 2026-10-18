@@ -10,7 +10,7 @@
   <table>
     <thead><tr><th>Name</th><th>Type</th><th>Battery</th><th>Signal</th><th></th></tr></thead>
     <tbody>
-    {% for s in sensors %}
+    {% for s in sensors or [] %}
       <tr{% if s.id == config.active_sensor_id %} class="linked"{% endif %}>
         <td>{{ s.name }}<br><span class="muted mono">{{ s.id }}</span></td>
         <td>{{ s.type or "—" }}{% if not s.active %} <span class="muted">(inactive)</span>{% endif %}</td>
@@ -33,7 +33,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="5">No sensors found.</td></tr>
+      <tr><td colspan="5">{% if sensors is none %}Not loaded yet: SensorPush allows one request a minute. Reload in a minute.{% else %}No sensors found.{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -41,6 +41,9 @@
 
 <section class="card">
   <h2>Gateways</h2>
+  {% if gateways is none %}
+    <p class="muted">Not checked: SensorPush allows one request a minute. Reload in a minute to see gateways.</p>
+  {% else %}
   <ul>
   {% for gw in gateways %}
     <li>{{ gw.name }}: last seen {{ gw.last_seen|ago(now) if gw.last_seen else "never" }}</li>
@@ -48,5 +51,6 @@
     <li>No gateways found.</li>
   {% endfor %}
   </ul>
+  {% endif %}
 </section>
 {% endblock %}
