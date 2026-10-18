@@ -1,4 +1,4 @@
-# The bucket is created by this stack; see README.md for rebuilding from scratch.
+# The bucket is created by this stack; see "How the first apply was done" in README.md.
 terraform {
   backend "gcs" {
     bucket = "greenhouse-alerter-tfstate"
