@@ -133,9 +133,12 @@ class SensorPushClient:
                     token = self._post(
                         "/oauth/accesstoken", {"authorization": auth["authorization"]}, policy
                     )
-                    self._token = str(token["accesstoken"])
+                    access_token = token["accesstoken"]
                 except KeyError as exc:
                     raise SensorUnavailable(f"SensorPush login response is missing {exc}") from None
+                if not isinstance(access_token, str) or not access_token:
+                    raise SensorUnavailable("SensorPush login returned an empty access token")
+                self._token = access_token
                 self._token_expires = time.monotonic() + TOKEN_TTL.total_seconds()
             return self._token
 
@@ -143,7 +146,11 @@ class SensorPushClient:
         try:
             return self._post(path, body, policy, token=self._access_token(policy))
         except _AuthExpired:
+            pass
+        try:
             return self._post(path, body, policy, token=self._access_token(policy, force=True))
+        except _AuthExpired:
+            raise SensorUnavailable(f"SensorPush {path} refused a freshly issued token") from None
 
     def latest_reading(self, sensor_id: str, policy: CallPolicy = WORKER_POLICY) -> Reading:
         """The sensor's newest sample, however old.

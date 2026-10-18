@@ -192,3 +192,23 @@ def test_malformed_device_listings_raise_sensor_unavailable(method, path):
     responses.post(f"{API_BASE}{path}", json={"id-1": "not-an-object"})
     with pytest.raises(SensorUnavailable):
         getattr(SensorPushClient("e@x", "pw"), method)(ONE_SHOT)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@responses.activate
+def test_unauthorized_after_refresh_raises_sensor_unavailable(status):
+    mock_login(responses)
+    responses.post(f"{API_BASE}/samples", status=status)
+    with pytest.raises(SensorUnavailable):
+        SensorPushClient("e@x", "pw").latest_reading("s1", ONE_SHOT)
+    authorize_calls = [c for c in responses.calls if c.request.url.endswith("/oauth/authorize")]
+    assert len(authorize_calls) == 2
+
+
+@pytest.mark.parametrize("token", [None, "", 123])
+@responses.activate
+def test_empty_or_non_string_access_token_raises_sensor_unavailable(token):
+    responses.post(f"{API_BASE}/oauth/authorize", json={"authorization": "auth-code"})
+    responses.post(f"{API_BASE}/oauth/accesstoken", json={"accesstoken": token})
+    with pytest.raises(SensorUnavailable):
+        SensorPushClient("e@x", "pw").latest_reading("s1", ONE_SHOT)
