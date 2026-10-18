@@ -1,0 +1,8 @@
+# Renamed to backend.tf after the first apply has created the bucket; then run
+#   terraform init -migrate-state
+terraform {
+  backend "gcs" {
+    bucket = "greenhouse-alerter-tfstate"
+    prefix = "bootstrap"
+  }
+}
