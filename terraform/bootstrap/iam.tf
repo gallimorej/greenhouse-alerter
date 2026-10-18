@@ -1,6 +1,15 @@
-resource "google_service_account" "runtime" {
-  account_id   = "greenhouse-runtime"
-  display_name = "Greenhouse worker and admin runtime"
+# Separate runtime identities, so the admin service can't read the IFTTT key and the worker can't
+# read the Flask signing key.
+resource "google_service_account" "worker" {
+  account_id   = "greenhouse-worker"
+  display_name = "Greenhouse worker runtime"
+
+  depends_on = [google_project_service.enabled]
+}
+
+resource "google_service_account" "admin" {
+  account_id   = "greenhouse-admin"
+  display_name = "Greenhouse admin runtime"
 
   depends_on = [google_project_service.enabled]
 }
@@ -19,11 +28,16 @@ resource "google_service_account" "deploy" {
   depends_on = [google_project_service.enabled]
 }
 
-# Runtime: read/write only the greenhouse Firestore database.
+# Both runtimes: read/write only the greenhouse Firestore database.
 resource "google_project_iam_member" "runtime_firestore" {
+  for_each = {
+    worker = google_service_account.worker.email
+    admin  = google_service_account.admin.email
+  }
+
   project = var.project_id
   role    = "roles/datastore.user"
-  member  = "serviceAccount:${google_service_account.runtime.email}"
+  member  = "serviceAccount:${each.value}"
 
   condition {
     title      = "greenhouse-database-only"
@@ -52,7 +66,8 @@ resource "google_project_iam_member" "deploy" {
 
 resource "google_service_account_iam_member" "deploy_acts_as" {
   for_each = {
-    runtime   = google_service_account.runtime.name
+    worker    = google_service_account.worker.name
+    admin     = google_service_account.admin.name
     scheduler = google_service_account.scheduler.name
   }
 

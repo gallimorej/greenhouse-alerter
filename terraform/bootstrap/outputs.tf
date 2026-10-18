@@ -10,8 +10,12 @@ output "firestore_database" {
   value = google_firestore_database.greenhouse.name
 }
 
-output "runtime_service_account" {
-  value = google_service_account.runtime.email
+output "worker_service_account" {
+  value = google_service_account.worker.email
+}
+
+output "admin_service_account" {
+  value = google_service_account.admin.email
 }
 
 output "scheduler_service_account" {
