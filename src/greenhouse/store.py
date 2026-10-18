@@ -33,6 +33,12 @@ POLL_SLACK = timedelta(seconds=15)
 # isn't running, and the admin pages stop yielding to it.
 WORKER_IDLE_AFTER = timedelta(minutes=2)
 
+# Event queries read in pages. EVENTS_MAX is above the most commands 7 days can hold at the 30 s
+# minimum dispatch spacing (20,160), so the history chart's range is always complete.
+EVENT_PAGE = 500
+EVENTS_MAX = 25_000
+EVENT_SCAN = 5_000
+
 Docs = dict[str, dict | None]
 Writes = dict[str, dict]
 
@@ -67,8 +73,12 @@ class Store:
     def recent_events(self, limit: int = 20) -> list[dict]:
         raise NotImplementedError
 
-    def events_since(self, start: datetime, limit: int = 2000) -> list[dict]:
-        """Events at or after ``start``, oldest first."""
+    def events_since(self, start: datetime) -> list[dict]:
+        """Every event at or after ``start``, oldest first, read in pages (up to EVENTS_MAX)."""
+        raise NotImplementedError
+
+    def last_event_before(self, start: datetime, kind: str) -> dict | None:
+        """The newest event of ``kind`` before ``start``, looking back at most EVENT_SCAN events."""
         raise NotImplementedError
 
     # --- reads ------------------------------------------------------------------------------
@@ -99,11 +109,15 @@ class Store:
         actor: str,
         kind: str,
         now: datetime,
-        detail: dict | None = None,
+        detail: dict | Callable[[AppConfig, AppConfig], dict] | None = None,
     ) -> AppConfig:
+        """Apply ``change`` to the latest config. ``detail`` may be a function of (old, new), so the
+        audit event describes exactly what this transaction replaced."""
+
         def write(d):
-            config = change(appconfig.from_dict(d[CONFIG]))
-            path, event = _event(kind, actor, now, detail)
+            old = appconfig.from_dict(d[CONFIG])
+            config = change(old)
+            path, event = _event(kind, actor, now, detail(old, config) if callable(detail) else detail)
             return {CONFIG: appconfig.to_dict(config), path: event}, config
 
         return self._transact([CONFIG], write)
@@ -286,10 +300,16 @@ class MemoryStore(Store):
             events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/")]
         return sorted(events, key=lambda e: e["at"], reverse=True)[:limit]
 
-    def events_since(self, start, limit=2000):
+    def events_since(self, start):
         with self._lock:
             events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/") and d["at"] >= start]
-        return sorted(events, key=lambda e: e["at"])[:limit]
+        return sorted(events, key=lambda e: e["at"])[:EVENTS_MAX]
+
+    def last_event_before(self, start, kind):
+        with self._lock:
+            events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/") and d["at"] < start]
+        newest = sorted(events, key=lambda e: e["at"], reverse=True)[:EVENT_SCAN]
+        return next((e for e in newest if e.get("kind") == kind), None)
 
 
 class FirestoreStore(Store):
@@ -325,13 +345,35 @@ class FirestoreStore(Store):
         )
         return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]
 
-    def events_since(self, start, limit=2000):
+    def _pages(self, query, cap):
+        """Stream ``query`` in pages of EVENT_PAGE, up to ``cap`` documents."""
+        seen, last = 0, None
+        while seen < cap:
+            page = query.limit(min(EVENT_PAGE, cap - seen))
+            if last is not None:
+                page = page.start_after(last)
+            snaps = list(page.stream(timeout=self._timeout_s))
+            for snap in snaps:
+                yield snap.to_dict()
+            seen += len(snaps)
+            if len(snaps) < EVENT_PAGE:
+                return
+            last = snaps[-1]
+
+    def events_since(self, start):
         from google.cloud.firestore_v1.base_query import FieldFilter
 
+        query = self._client.collection(EVENTS).where(filter=FieldFilter("at", ">=", start)).order_by("at")
+        return list(self._pages(query, EVENTS_MAX))
+
+    def last_event_before(self, start, kind):
+        from google.cloud import firestore
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        # Filtered here rather than by the query, which would need a composite (kind, at) index.
         query = (
             self._client.collection(EVENTS)
-            .where(filter=FieldFilter("at", ">=", start))
-            .order_by("at")
-            .limit(limit)
+            .where(filter=FieldFilter("at", "<", start))
+            .order_by("at", direction=firestore.Query.DESCENDING)
         )
-        return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]
+        return next((e for e in self._pages(query, EVENT_SCAN) if e.get("kind") == kind), None)

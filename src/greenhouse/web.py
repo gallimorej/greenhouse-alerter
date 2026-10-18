@@ -19,7 +19,7 @@ from flask_wtf.csrf import CSRFProtect
 from greenhouse import config as envconfig
 from greenhouse import controller, forms
 from greenhouse.chart import render as render_chart
-from greenhouse.actuation import LeaseHeld
+from greenhouse.actuation import ACCEPTED, RESEND_RESULTS, ControllerDoc, LeaseHeld
 from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier, parse_allowlist
 from greenhouse.fans import IftttClient
 from greenhouse.sensors import CallPolicy, SensorPushClient, SensorSource, SensorUnavailable
@@ -136,9 +136,9 @@ def dashboard():
     override = data["override"]
     if override is not None and override.expires_at <= now:
         override = None
-    changed_at = data["override_changed_at"]
-    # A manual change is applied by the next tick; until then, say so.
-    pending = bool(changed_at) and (not status or status["updated_at"] <= changed_at)
+    progress = override_progress(
+        override, data["override_changed_at"], status, data["controller"], data["config"].actuation_enabled
+    )
     return render_template(
         "dashboard.html",
         now=now,
@@ -146,10 +146,37 @@ def dashboard():
         controller=data["controller"],
         status=status,
         override=override,
-        override_pending=pending,
+        override_progress=progress,
         next_cycle=controller.next_cycle_start(now, data["config"].controller),
         events=s.store.recent_events(15),
     )
+
+
+def override_progress(
+    override, changed_at: datetime | None, status: dict, doc: ControllerDoc, actuation_enabled: bool
+) -> str | None:
+    """Where a manual change stands, judged from the command record rather than tick timestamps.
+
+    pending: no tick since the change. disabled: fan control is off, so nothing is sent.
+    applied: the last accepted command matches the override. failed: the command for it didn't go
+    through and will be resent. sending: a tick has run but no matching command is accepted yet.
+    None: nothing to report (no recent change, or back to automatic and a tick has run).
+    """
+    if changed_at is None:
+        return None
+    if not status or status.get("updated_at") is None or status["updated_at"] <= changed_at:
+        return "pending"
+    if override is None:
+        return None
+    if not actuation_enabled:
+        return "disabled"
+    last = doc.last_command
+    if last is not None and last.on == override.on and last.result in RESEND_RESULTS - {"pending"}:
+        return "failed"
+    settled = last is None or last.result == ACCEPTED
+    if settled and doc.last_accepted_on == override.on and not doc.command_state_uncertain:
+        return "applied"
+    return "sending"
 
 
 @admin_bp.post("/override")
@@ -198,7 +225,11 @@ def save_settings():
             sensor_poll_interval=new.sensor_poll_interval,
         )
 
-    s.store.update_config(apply, g.user, "settings_changed", s.now(), {"changed": diff})
+    def audit(old, saved):
+        # Against the config this transaction actually replaced, not the one the form was built on.
+        return {"changed": forms.settings_diff(old, saved)}
+
+    s.store.update_config(apply, g.user, "settings_changed", s.now(), audit)
     flash(f"Saved: {', '.join(sorted(diff))}. The next tick uses them.", "info")
     return redirect(url_for("admin.settings"))
 
@@ -230,7 +261,11 @@ def history():
                 cache[key] = (now + HISTORY_TTL, readings, truncated)
             except SensorUnavailable as exc:
                 error = str(exc)
-    events = [e for e in s.store.events_since(start - timedelta(days=1)) if e.get("kind") == "command_accepted"]
+    # Every command in the range, plus the last one before it, which says whether the fans were on
+    # when the range starts.
+    before = s.store.last_event_before(start, "command_accepted")
+    events = [before] if before else []
+    events += [e for e in s.store.events_since(start) if e.get("kind") == "command_accepted"]
     chart = render_chart(
         readings, events, start, now, config.controller.high_f, config.controller.low_f, config.controller.timezone
     )

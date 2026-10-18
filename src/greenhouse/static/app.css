@@ -84,6 +84,7 @@ svg.chart { width: 100%; height: auto; display: block; }
 .chart .threshold { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
 .chart .fan-on { fill: var(--fan-on); }
 .chart .temp-line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .temp-dot { fill: var(--series-1); }
 .chart .temp-end { fill: var(--series-1); stroke: var(--card); stroke-width: 2; }
 .chart .hit { fill: transparent; }
 .chart .hit:hover { fill: var(--series-1); fill-opacity: .08; }

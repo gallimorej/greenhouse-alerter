@@ -57,8 +57,8 @@
     <h2>SensorPush</h2>
     <div class="fields">
       {{ field("sensor_poll_minutes", "Fetch a new reading every (min)", (config.sensor_poll_interval.total_seconds() / 60)|int, hint="The admin pages use the time between fetches.") }}
-      {{ field("sensorpush_calls_per_minute", "API requests allowed per minute", config.sensorpush_calls_per_minute, hint="Shared by the fan controller and these pages. SensorPush asks for no more than 1.") }}
     </div>
+    <p class="muted">SensorPush allows one API request a minute, shared by the fan controller and these pages.</p>
   </section>
 
   <button>Save settings</button>

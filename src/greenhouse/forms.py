@@ -1,5 +1,6 @@
 """Parse and validate admin form posts into new config values. Pure functions; nothing is saved here."""
 
+import math
 import re
 from dataclasses import replace
 from datetime import datetime, time, timedelta
@@ -16,6 +17,9 @@ def _float(form, name, errors, lo=None, hi=None):
     try:
         value = float(form.get(name, ""))
     except ValueError:
+        errors[name] = "Enter a number."
+        return None
+    if not math.isfinite(value):
         errors[name] = "Enter a number."
         return None
     if (lo is not None and value < lo) or (hi is not None and value > hi):
@@ -56,7 +60,6 @@ def parse_settings(form, current: AppConfig) -> tuple[AppConfig | None, dict[str
     }
     stale = _int(form, "stale_after_minutes", errors, 5, 240)
     reassert = _int(form, "reassert_after_minutes", errors, 5, 720)
-    calls = _int(form, "sensorpush_calls_per_minute", errors, 1, 10)
     poll = _int(form, "sensor_poll_minutes", errors, 1, 30)
     if poll is not None and stale is not None and poll >= stale:
         errors["sensor_poll_minutes"] = "Must be shorter than the time a reading counts as stale."
@@ -79,7 +82,6 @@ def parse_settings(form, current: AppConfig) -> tuple[AppConfig | None, dict[str
         reassert_after=timedelta(minutes=reassert),
         ifttt_on_event=on_event,
         ifttt_off_event=off_event,
-        sensorpush_calls_per_minute=calls,
         sensor_poll_interval=timedelta(minutes=poll),
     ), {}
 
@@ -102,6 +104,8 @@ def parse_override(form, now: datetime) -> tuple[str | None, datetime | None, st
     try:
         hours = float(form.get("hours", "1"))
     except ValueError:
+        return None, None, "Enter how long, in hours."
+    if not math.isfinite(hours):
         return None, None, "Enter how long, in hours."
     duration = timedelta(hours=hours)
     if not timedelta(minutes=15) <= duration <= OVERRIDE_MAX:
