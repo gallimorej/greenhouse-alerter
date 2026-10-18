@@ -128,11 +128,14 @@ resource "google_monitoring_dashboard" "greenhouse" {
           widget = {
             title = "Alerts"
             incidentList = {
+              # The dashboard API wants "alertPolicies/{id}", not the full resource name.
               policyNames = [
-                google_monitoring_alert_policy.tick_errors.name,
-                google_monitoring_alert_policy.stale_reading.name,
-                google_monitoring_alert_policy.no_successful_tick.name,
-                google_monitoring_alert_policy.ifttt_failures.name,
+                for p in [
+                  google_monitoring_alert_policy.tick_errors,
+                  google_monitoring_alert_policy.stale_reading,
+                  google_monitoring_alert_policy.no_successful_tick,
+                  google_monitoring_alert_policy.ifttt_failures,
+                ] : "alertPolicies/${element(split("/", p.name), 3)}"
               ]
             }
           }
