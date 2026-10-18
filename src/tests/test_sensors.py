@@ -212,3 +212,15 @@ def test_empty_or_non_string_access_token_raises_sensor_unavailable(token):
     responses.post(f"{API_BASE}/oauth/accesstoken", json={"accesstoken": token})
     with pytest.raises(SensorUnavailable):
         SensorPushClient("e@x", "pw").latest_reading("s1", ONE_SHOT)
+
+
+@responses.activate
+def test_rationed_caller_does_not_repeat_the_request_after_an_expired_token():
+    mock_login(responses)
+    responses.post(f"{API_BASE}/samples", status=401)
+    client = SensorPushClient("e@x", "pw")
+    with pytest.raises(SensorUnavailable, match="refreshed"):
+        client.latest_reading("s1", CallPolicy(timeout_s=1, attempts=1, reauth_retry=False))
+    sample_calls = [c for c in responses.calls if c.request.url.endswith("/samples")]
+    authorize_calls = [c for c in responses.calls if c.request.url.endswith("/oauth/authorize")]
+    assert len(sample_calls) == 1 and len(authorize_calls) == 2

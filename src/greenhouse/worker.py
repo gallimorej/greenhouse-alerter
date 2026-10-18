@@ -110,7 +110,9 @@ def run_tick(
             error = "execution budget exhausted before sensor read"
         elif store.consume_sensorpush_call("worker", now()):
             fetched, fetched_at = True, now()
-            policy = CallPolicy(timeout_s=min(SENSOR_TIMEOUT_S, deadline.remaining() - 1), attempts=1)
+            policy = CallPolicy(
+                timeout_s=min(SENSOR_TIMEOUT_S, deadline.remaining() - 1), attempts=1, reauth_retry=False
+            )
             try:
                 reading = sensors.latest_reading(sensor_id, policy)
             except SensorUnavailable as exc:

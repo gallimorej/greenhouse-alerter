@@ -277,3 +277,10 @@ def test_cap_above_one_allows_more_calls_a_minute(make):
     assert store.consume_sensorpush_call("worker", NOON)
     assert store.consume_sensorpush_call("admin", NOON)
     assert not store.consume_sensorpush_call("admin", NOON)
+
+
+def test_worker_sensor_call_is_a_single_request(make):
+    store, sensors, fans, clock = make()
+    tick(store, sensors, fans, clock)
+    (policy,) = sensors.policies
+    assert policy.attempts == 1 and not policy.reauth_retry

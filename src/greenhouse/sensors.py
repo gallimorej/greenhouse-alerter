@@ -32,6 +32,9 @@ class CallPolicy:
     timeout_s: float = 10.0
     attempts: int = 3
     backoff_s: float = 1.0
+    # Repeat the request right after a 401/403 with a fresh token. Callers that ration requests turn
+    # this off: the token is still refreshed, and the request waits for their next granted call.
+    reauth_retry: bool = True
 
 
 WORKER_POLICY = CallPolicy(timeout_s=8.0, attempts=1)
@@ -146,7 +149,11 @@ class SensorPushClient:
         try:
             return self._post(path, body, policy, token=self._access_token(policy))
         except _AuthExpired:
-            pass
+            if not policy.reauth_retry:
+                self._access_token(policy, force=True)
+                raise SensorUnavailable(
+                    f"SensorPush {path} rejected an expired token; refreshed it for the next call"
+                ) from None
         try:
             return self._post(path, body, policy, token=self._access_token(policy, force=True))
         except _AuthExpired:

@@ -102,8 +102,9 @@ def require_iap_user():
         abort(403)
 
 
-# One granted SensorPush call is one HTTP attempt, so admin pages don't retry.
-ADMIN_CALL = CallPolicy(timeout_s=10.0, attempts=1)
+# One granted SensorPush call is one HTTP request, so admin pages don't retry, even after an expired
+# token.
+ADMIN_CALL = CallPolicy(timeout_s=10.0, attempts=1, reauth_retry=False)
 # How long a passed link test stays valid for confirming it.
 LINK_CHECK_VALID = timedelta(minutes=5)
 # Account sensor and gateway listings are cached, so with one SensorPush call a minute a reload can
