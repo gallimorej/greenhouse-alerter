@@ -57,10 +57,12 @@ resource "google_monitoring_dashboard" "greenhouse" {
                 timeSeriesQuery = {
                   timeSeriesFilter = {
                     filter = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.temperature.name}\" AND resource.type=\"cloud_run_revision\""
+                    # The aligner takes the median of each series' readings in the window; normally
+                    # one revision is serving, and the mean only matters across a deploy.
                     aggregation = {
                       alignmentPeriod    = "300s"
-                      perSeriesAligner   = "ALIGN_DELTA"
-                      crossSeriesReducer = "REDUCE_PERCENTILE_50"
+                      perSeriesAligner   = "ALIGN_PERCENTILE_50"
+                      crossSeriesReducer = "REDUCE_MEAN"
                     }
                   }
                 }
@@ -107,10 +109,11 @@ resource "google_monitoring_dashboard" "greenhouse" {
                 timeSeriesQuery = {
                   timeSeriesFilter = {
                     filter = "metric.type=\"run.googleapis.com/request_latencies\" AND ${local.cloud_run_worker}"
+                    # p95 of each series' requests in the window; the worst series across a deploy.
                     aggregation = {
                       alignmentPeriod    = "300s"
-                      perSeriesAligner   = "ALIGN_DELTA"
-                      crossSeriesReducer = "REDUCE_PERCENTILE_95"
+                      perSeriesAligner   = "ALIGN_PERCENTILE_95"
+                      crossSeriesReducer = "REDUCE_MAX"
                     }
                   }
                 }
