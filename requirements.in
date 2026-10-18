@@ -1,2 +1,7 @@
 requests
+google-auth
 google-cloud-secret-manager
+google-cloud-firestore
+flask
+flask-wtf
+gunicorn

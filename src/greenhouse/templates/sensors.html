@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Sensors · Greenhouse{% endblock %}
+{% block content %}
+<h1>Sensors</h1>
+<p class="muted">Sensors on the SensorPush account. Add a new sensor in the SensorPush app first, within range of a gateway. One sensor controls the fans.</p>
+
+{% if error %}<p class="banner error">Couldn't reach SensorPush: {{ error }}</p>{% endif %}
+
+<section class="card">
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Battery</th><th>Signal</th><th></th></tr></thead>
+    <tbody>
+    {% for s in sensors %}
+      <tr{% if s.id == config.active_sensor_id %} class="linked"{% endif %}>
+        <td>{{ s.name }}<br><span class="muted mono">{{ s.id }}</span></td>
+        <td>{{ s.type or "—" }}{% if not s.active %} <span class="muted">(inactive)</span>{% endif %}</td>
+        <td>{{ "%.2f V"|format(s.battery_voltage) if s.battery_voltage is not none else "—" }}</td>
+        <td>{{ "%.0f dBm"|format(s.rssi) if s.rssi is not none else "—" }}</td>
+        <td>
+          {% if s.id == config.active_sensor_id %}
+            <strong>Linked</strong>
+            <form method="post" action="{{ url_for('admin.unlink_sensor') }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="secondary">Unlink</button>
+            </form>
+          {% else %}
+            <form method="post" action="{{ url_for('admin.test_sensor') }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="sensor_id" value="{{ s.id }}">
+              <button>Link…</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No sensors found.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Gateways</h2>
+  <ul>
+  {% for gw in gateways %}
+    <li>{{ gw.name }}: last seen {{ gw.last_seen|ago(now) if gw.last_seen else "never" }}</li>
+  {% else %}
+    <li>No gateways found.</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

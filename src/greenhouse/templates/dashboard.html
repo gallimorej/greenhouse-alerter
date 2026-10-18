@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Status · Greenhouse{% endblock %}
+{% block content %}
+{% set reading = status.reading %}
+
+{% if not config.active_sensor_id %}
+  <p class="banner error">No sensor linked. Temperature control is frozen; scheduled cycles continue.
+    <a href="{{ url_for('admin.sensors') }}">Link a sensor</a></p>
+{% elif status and not status.sensor_fresh %}
+  <p class="banner error">The linked sensor has no fresh reading{% if status.sensor_error %} ({{ status.sensor_error }}){% endif %}. Temperature control is frozen.</p>
+{% endif %}
+{% if not config.actuation_enabled %}
+  <p class="banner warning">Shadow mode: decisions are computed and logged, but no fan commands are sent.</p>
+{% endif %}
+{% if controller.command_state_uncertain %}
+  <p class="banner warning">Fan state uncertain after a reconcile; the next eligible tick resends the desired state.</p>
+{% endif %}
+
+<section class="cards">
+  <div class="card">
+    <h2>Reading</h2>
+    {% if reading %}
+      <p class="big">{{ "%.1f"|format(reading.temperature_f) }}°F</p>
+      <p>{% if reading.humidity is not none %}{{ "%.0f"|format(reading.humidity) }}% RH{% endif %}
+         {% if reading.pressure is not none %} · {{ "%.2f"|format(reading.pressure) }} inHg{% endif %}</p>
+      <p class="{{ 'ok' if status.sensor_fresh else 'bad' }}">{{ reading.observed_at|ago(now) }}</p>
+    {% else %}
+      <p class="big">—</p>
+    {% endif %}
+    <p class="muted">Sensor {{ config.active_sensor_id or "not linked" }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Desired</h2>
+    {% if status %}
+      <p class="big">{{ {True: "ON", False: "OFF", None: "—"}[status.desired_on] }}</p>
+      <p>{{ status.reason }}</p>
+      <p class="muted">Updated {{ status.updated_at|ago(now) }}</p>
+    {% else %}
+      <p>No tick has run yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Last command</h2>
+    {% set cmd = controller.last_command %}
+    {% if cmd %}
+      <p class="big">{{ "ON" if cmd.on else "OFF" }}</p>
+      <p>{{ "delivery uncertain" if cmd.result == "unknown" else cmd.result }}{% if cmd.http_status %} ({{ cmd.http_status }}){% endif %}</p>
+      <p class="muted">{{ cmd.attempted_at|ago(now) }} · generation {{ cmd.generation }}</p>
+    {% else %}
+      <p>None sent yet.</p>
+    {% endif %}
+    <p class="muted">The switch gives no feedback: this is what was sent, not what the fans are doing.</p>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Controls</h2>
+  <form method="post" action="{{ url_for('admin.set_actuation') }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if config.actuation_enabled %}
+      <input type="hidden" name="enabled" value="off">
+      <button class="danger">Disable fan control</button>
+    {% else %}
+      <input type="hidden" name="enabled" value="on">
+      <button>Enable fan control</button>
+    {% endif %}
+  </form>
+  <form method="post" action="{{ url_for('admin.reconcile') }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="secondary">Reconcile</button>
+  </form>
+  <p class="muted">Rollback: pause the greenhouse-tick job, disable fan control, wait 90 s, then reconcile.</p>
+</section>
+
+<section class="card">
+  <h2>Recent events</h2>
+  <table>
+    <thead><tr><th>When</th><th>Event</th><th>By</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr><td>{{ e.at|ago(now) }}</td><td>{{ e.kind }}</td><td>{{ e.actor }}</td>
+          <td class="muted">{% for k, v in e.detail.items() %}{{ k }}={{ v }} {% endfor %}</td></tr>
+    {% else %}
+      <tr><td colspan="4">No events yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

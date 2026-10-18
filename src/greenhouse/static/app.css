@@ -1,0 +1,57 @@
+:root {
+  --bg: #f6f7f4;
+  --fg: #1d2420;
+  --muted: #64706a;
+  --card: #ffffff;
+  --line: #dde2dc;
+  --accent: #2f6b45;
+  --ok: #2f6b45;
+  --bad: #a33a2b;
+  --warn-bg: #fff4d6;
+  --error-bg: #fbe3df;
+  --info-bg: #e3f0e7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141815;
+    --fg: #e6ebe7;
+    --muted: #97a39c;
+    --card: #1d2320;
+    --line: #2e3631;
+    --accent: #7cc49a;
+    --ok: #7cc49a;
+    --bad: #f08c7c;
+    --warn-bg: #3b3218;
+    --error-bg: #42221d;
+    --info-bg: #1f3427;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; gap: 1rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .brand { font-weight: 700; color: var(--accent); text-decoration: none; }
+header nav { display: flex; gap: 1rem; flex: 1; }
+header .user { color: var(--muted); font-size: .875rem; }
+a { color: var(--accent); }
+main { max-width: 960px; margin: 0 auto; padding: 1rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; overflow-x: auto; }
+.card h2 { margin: 0 0 .5rem; font-size: .875rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.big { font-size: 2rem; font-weight: 700; margin: 0; }
+.muted { color: var(--muted); font-size: .875rem; }
+.mono { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all; }
+.ok { color: var(--ok); }
+.bad { color: var(--bad); font-weight: 600; }
+.banner { padding: .6rem .9rem; border-radius: 8px; }
+.banner.warning { background: var(--warn-bg); }
+.banner.error { background: var(--error-bg); }
+.banner.info { background: var(--info-bg); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr.linked { background: var(--info-bg); }
+form.inline { display: inline-block; margin: 0 .5rem .5rem 0; }
+button { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; }
+button.secondary { background: transparent; color: var(--accent); }
+button.danger { background: var(--bad); border-color: var(--bad); }
