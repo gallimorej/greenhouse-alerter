@@ -31,6 +31,15 @@ openssl rand -base64 48 | tr -d '\n' | \
   gcloud secrets versions add FLASK_SECRET_KEY --data-file=- --project greenhouse-alerter
 ```
 
+## IAP service agent
+
+The main configuration grants the IAP service agent invoker on the admin service, so the agent has to
+exist first:
+
+```sh
+gcloud beta services identity create --service=iap.googleapis.com --project greenhouse-alerter
+```
+
 ## Manual Console step (no API exists for it)
 
 The project has no organization, so IAP needs an OAuth client before it can admit an outside account:
@@ -38,5 +47,21 @@ Console → Security → Identity-Aware Proxy → configure OAuth → **Auto gen
 
 ## GitHub
 
-Set these repository variables (not secrets; they aren't sensitive) from `terraform output`:
-`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_DEPLOY_SERVICE_ACCOUNT`.
+Set these repository variables (not secrets; they aren't sensitive). The deploy job stays skipped
+until `GCP_WORKLOAD_IDENTITY_PROVIDER` is set.
+
+| Variable | Value |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `terraform output -raw workload_identity_provider` |
+| `GCP_DEPLOY_SERVICE_ACCOUNT` | `terraform output -raw deploy_service_account` |
+| `GCP_NOTIFICATION_CHANNEL` | `terraform output -raw admin_notification_channel` |
+| `ADMIN_EMAILS` | comma-separated admin Google accounts |
+
+```sh
+for v in workload_identity_provider:GCP_WORKLOAD_IDENTITY_PROVIDER \
+         deploy_service_account:GCP_DEPLOY_SERVICE_ACCOUNT \
+         admin_notification_channel:GCP_NOTIFICATION_CHANNEL; do
+  gh variable set "${v#*:}" --body "$(terraform output -raw "${v%%:*}")"
+done
+gh variable set ADMIN_EMAILS --body "you@example.com"
+```
