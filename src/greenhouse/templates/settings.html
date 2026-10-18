@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Settings · Greenhouse{% endblock %}
+{% macro value(name, current) -%}{{ form.get(name, current) if form else current }}{%- endmacro %}
+{% macro field(name, label, current, type="number", step=None, hint=None) -%}
+  <label class="field{% if errors.get(name) %} invalid{% endif %}">
+    <span>{{ label }}</span>
+    <input name="{{ name }}" type="{{ type }}" value="{{ value(name, current) }}"{% if step %} step="{{ step }}"{% endif %} required>
+    {% if errors.get(name) %}<small class="bad">{{ errors[name] }}</small>{% elif hint %}<small class="muted">{{ hint }}</small>{% endif %}
+  </label>
+{%- endmacro %}
+{% block content %}
+{% set c = config.controller %}
+<h1>Settings</h1>
+<p class="muted">Changes apply on the next tick (within a minute) and are recorded in the event log.</p>
+{% if errors.get("form") %}<p class="banner error">{{ errors["form"] }}</p>{% endif %}
+
+<form method="post" action="{{ url_for('admin.save_settings') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <section class="card">
+    <h2>Temperature</h2>
+    <div class="fields">
+      {{ field("high_f", "Fans on above (°F)", c.high_f, step="0.5") }}
+      {{ field("low_f", "Fans off below (°F)", c.low_f, step="0.5", hint="In between, the fans stay as they are.") }}
+      {{ field("stale_after_minutes", "Reading is stale after (min)", (c.stale_after.total_seconds() / 60)|int, hint="Then temperature control freezes and you get an alert.") }}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Active hours</h2>
+    <div class="fields">
+      {{ field("active_start", "Temperature control from", c.active_start.strftime("%H:%M"), type="time") }}
+      {{ field("active_end", "Until (exclusive)", c.active_end.strftime("%H:%M"), type="time", hint="Outside these hours temperature control is off; cycles still run.") }}
+      {{ field("timezone", "Time zone", c.timezone, type="text") }}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Air-circulation cycle</h2>
+    <div class="fields">
+      {{ field("cycle_interval_minutes", "Every (min)", c.cycle_interval_minutes, hint="Must divide a day evenly, e.g. 30, 60, 120.") }}
+      {{ field("cycle_offset_minutes", "Starting at minute", c.cycle_offset_minutes) }}
+      {{ field("cycle_duration_minutes", "Running for (min)", c.cycle_duration_minutes, hint="0 turns cycles off.") }}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Fan switch (IFTTT)</h2>
+    <div class="fields">
+      {{ field("ifttt_on_event", "On event", config.ifttt_on_event, type="text") }}
+      {{ field("ifttt_off_event", "Off event", config.ifttt_off_event, type="text") }}
+      {{ field("reassert_after_minutes", "Resend the current state every (min)", (config.reassert_after.total_seconds() / 60)|int, hint="In case the switch was changed by hand.") }}
+      {{ field("sensorpush_admin_calls_per_minute", "SensorPush calls per minute for these pages", config.sensorpush_admin_calls_per_minute) }}
+    </div>
+  </section>
+
+  <button>Save settings</button>
+</form>
+{% endblock %}

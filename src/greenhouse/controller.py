@@ -110,6 +110,15 @@ def in_active_hours(local: datetime, settings: Settings) -> bool:
     return t >= start or t < end
 
 
+def next_cycle_start(now: datetime, settings: Settings) -> datetime:
+    """The next local wall-clock minute (after ``now``) at which a cycle begins."""
+    local = now.astimezone(ZoneInfo(settings.timezone)).replace(second=0, microsecond=0)
+    minute_of_day = local.hour * 60 + local.minute
+    into_interval = (minute_of_day - settings.cycle_offset_minutes) % settings.cycle_interval_minutes
+    candidate = local + timedelta(minutes=settings.cycle_interval_minutes - into_interval)
+    return candidate.astimezone(now.tzinfo)
+
+
 def in_cycle(local: datetime, settings: Settings) -> bool:
     minute_of_day = local.hour * 60 + local.minute
     into_interval = (minute_of_day - settings.cycle_offset_minutes) % settings.cycle_interval_minutes

@@ -10,13 +10,15 @@ import logging
 import secrets as pysecrets
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, Flask, abort, current_app, flash, g, redirect, render_template, request, url_for
 from flask_wtf.csrf import CSRFProtect
 
 from greenhouse import config as envconfig
-from greenhouse import controller
+from greenhouse import controller, forms
+from greenhouse.chart import render as render_chart
 from greenhouse.actuation import LeaseHeld
 from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier, parse_allowlist
 from greenhouse.fans import IftttClient
@@ -112,15 +114,119 @@ def _admin_sensor_call() -> bool:
 @admin_bp.get("/")
 def dashboard():
     s = services()
+    now = s.now()
     data = s.store.get_dashboard()
+    status = data["status"] or {}
+    override = data["override"]
+    if override is not None and override.expires_at <= now:
+        override = None
+    changed_at = data["override_changed_at"]
+    # A manual change is applied by the next tick; until then, say so.
+    pending = bool(changed_at) and (not status or status["updated_at"] <= changed_at)
     return render_template(
         "dashboard.html",
-        now=s.now(),
+        now=now,
         config=data["config"],
         controller=data["controller"],
-        status=data["status"] or {},
-        override=data["override"],
+        status=status,
+        override=override,
+        override_pending=pending,
+        next_cycle=controller.next_cycle_start(now, data["config"].controller),
         events=s.store.recent_events(15),
+    )
+
+
+@admin_bp.post("/override")
+def set_override():
+    s = services()
+    now = s.now()
+    mode, expires_at, error = forms.parse_override(request.form, now)
+    if error:
+        flash(error, "error")
+    elif mode == "auto":
+        s.store.clear_override(g.user, now)
+        flash("Back to automatic control. The next tick applies it.", "info")
+    else:
+        s.store.set_override(mode == "on", expires_at, g.user, now)
+        flash(f"Fans {mode.upper()} until {ago_until(expires_at, now)}. The next tick applies it.", "info")
+    return redirect(url_for("admin.dashboard"))
+
+
+@admin_bp.get("/settings")
+def settings():
+    config = services().store.get_config()
+    return render_template("settings.html", config=config, form=None, errors={})
+
+
+@admin_bp.post("/settings")
+def save_settings():
+    s = services()
+    current = s.store.get_config()
+    new, errors = forms.parse_settings(request.form, current)
+    if errors:
+        return render_template("settings.html", config=current, form=request.form, errors=errors), 400
+    diff = forms.settings_diff(current, new)
+    if not diff:
+        flash("No changes.", "info")
+        return redirect(url_for("admin.settings"))
+
+    def apply(latest):
+        # Only the fields this form owns; the kill switch and sensor link keep their latest values.
+        return replace(
+            latest,
+            controller=new.controller,
+            reassert_after=new.reassert_after,
+            ifttt_on_event=new.ifttt_on_event,
+            ifttt_off_event=new.ifttt_off_event,
+            sensorpush_admin_calls_per_minute=new.sensorpush_admin_calls_per_minute,
+        )
+
+    s.store.update_config(apply, g.user, "settings_changed", s.now(), {"changed": diff})
+    flash(f"Saved: {', '.join(sorted(diff))}. The next tick uses them.", "info")
+    return redirect(url_for("admin.settings"))
+
+
+HISTORY_RANGES = {"24h": timedelta(hours=24), "7d": timedelta(days=7)}
+HISTORY_TTL = timedelta(minutes=5)
+
+
+@admin_bp.get("/history")
+def history():
+    s = services()
+    now = s.now()
+    range_key = request.args.get("range", "24h")
+    if range_key not in HISTORY_RANGES:
+        abort(400)
+    config = s.store.get_config()
+    sensor_id = config.active_sensor_id
+    start = now - HISTORY_RANGES[range_key]
+    readings, truncated, error = [], False, None
+    if sensor_id:
+        cache = current_app.extensions["greenhouse_history"]
+        key = (sensor_id, range_key)
+        hit = cache.get(key)
+        if hit and hit[0] > now:
+            readings, truncated = hit[1], hit[2]
+        elif _admin_sensor_call():
+            try:
+                readings, truncated = s.sensors.history(sensor_id, start, ADMIN_POLICY)
+                cache[key] = (now + HISTORY_TTL, readings, truncated)
+            except SensorUnavailable as exc:
+                error = str(exc)
+    events = [e for e in s.store.events_since(start - timedelta(days=1)) if e.get("kind") == "command_accepted"]
+    chart = render_chart(
+        readings, events, start, now, config.controller.high_f, config.controller.low_f, config.controller.timezone
+    )
+    return render_template(
+        "history.html",
+        now=now,
+        config=config,
+        range_key=range_key,
+        ranges=list(HISTORY_RANGES),
+        chart=chart,
+        truncated=truncated,
+        error=error,
+        tz=ZoneInfo(config.controller.timezone),
     )
 
 
@@ -236,6 +342,14 @@ def unlink_sensor():
 
 # --- factory -------------------------------------------------------------------------------
 
+def ago_until(then: datetime, now: datetime) -> str:
+    minutes = round((then - now).total_seconds() / 60)
+    if minutes < 60:
+        return f"{minutes} min from now"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes} min from now" if minutes else f"{hours} h from now"
+
+
 def ago(then: datetime | None, now: datetime) -> str:
     if then is None:
         return "never"
@@ -312,6 +426,8 @@ def create_app(role: str | None = None, services: Services | None = None) -> Fla
             return redirect(url_for("admin.dashboard"))
 
     app.add_template_filter(ago)
+    app.add_template_filter(ago_until)
+    app.extensions["greenhouse_history"] = {}
 
     @app.after_request
     def security_headers(response):

@@ -38,7 +38,7 @@ class TickPlan:
 
 
 def _override_from(data: dict | None) -> Override | None:
-    if not data:
+    if not data or "on" not in data:
         return None
     return Override(on=bool(data["on"]), expires_at=data["expires_at"])
 
@@ -59,6 +59,10 @@ class Store:
     def recent_events(self, limit: int = 20) -> list[dict]:
         raise NotImplementedError
 
+    def events_since(self, start: datetime, limit: int = 2000) -> list[dict]:
+        """Events at or after ``start``, oldest first."""
+        raise NotImplementedError
+
     # --- reads ------------------------------------------------------------------------------
 
     def read_raw(self, path: str) -> dict | None:
@@ -74,6 +78,7 @@ class Store:
                 "controller": actuation.from_dict(d[CONTROLLER]),
                 "status": d[STATUS],
                 "override": _override_from(d[OVERRIDE]),
+                "override_changed_at": (d[OVERRIDE] or {}).get("changed_at"),
             }
 
         return self._transact([CONFIG, CONTROLLER, STATUS, OVERRIDE], read)
@@ -98,14 +103,16 @@ class Store:
     def set_override(self, on: bool, expires_at: datetime, actor: str, now: datetime) -> None:
         def write(d):
             path, event = _event("override_set", actor, now, {"on": on, "expires_at": expires_at})
-            return {OVERRIDE: {"on": on, "expires_at": expires_at, "set_by": actor}, path: event}, None
+            doc = {"on": on, "expires_at": expires_at, "changed_by": actor, "changed_at": now}
+            return {OVERRIDE: doc, path: event}, None
 
         self._transact([], write)
 
     def clear_override(self, actor: str, now: datetime) -> None:
         def write(d):
             path, event = _event("override_cleared", actor, now)
-            return {OVERRIDE: {}, path: event}, None
+            # No "on" key means no override; changed_at lets the UI show "pending" until a tick runs.
+            return {OVERRIDE: {"changed_by": actor, "changed_at": now}, path: event}, None
 
         self._transact([], write)
 
@@ -249,6 +256,11 @@ class MemoryStore(Store):
             events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/")]
         return sorted(events, key=lambda e: e["at"], reverse=True)[:limit]
 
+    def events_since(self, start, limit=2000):
+        with self._lock:
+            events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/") and d["at"] >= start]
+        return sorted(events, key=lambda e: e["at"])[:limit]
+
 
 class FirestoreStore(Store):
     def __init__(self, client, timeout_s: float = 5.0):
@@ -279,6 +291,17 @@ class FirestoreStore(Store):
         query = (
             self._client.collection(EVENTS)
             .order_by("at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]
+
+    def events_since(self, start, limit=2000):
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        query = (
+            self._client.collection(EVENTS)
+            .where(filter=FieldFilter("at", ">=", start))
+            .order_by("at")
             .limit(limit)
         )
         return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]

@@ -7,7 +7,7 @@ the access token goes in the ``Authorization`` header as-is (no "Bearer" prefix)
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 import requests
@@ -37,6 +37,9 @@ class CallPolicy:
 WORKER_POLICY = CallPolicy(timeout_s=8.0, attempts=1)
 ADMIN_POLICY = CallPolicy()
 
+# A week at one sample a minute is 10,080 samples, so one call covers it.
+HISTORY_LIMIT = 12000
+
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
@@ -61,6 +64,12 @@ class SensorSource(Protocol):
     def latest_reading(self, sensor_id: str, policy: CallPolicy = WORKER_POLICY) -> Reading: ...
 
     def sensors(self, policy: CallPolicy = ADMIN_POLICY) -> list[SensorInfo]: ...
+
+    def gateways(self, policy: CallPolicy = ADMIN_POLICY) -> list["GatewayInfo"]: ...
+
+    def history(
+        self, sensor_id: str, start: datetime, policy: CallPolicy = ADMIN_POLICY, limit: int = ...
+    ) -> tuple[list[Reading], bool]: ...
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -144,6 +153,36 @@ class SensorPushClient:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise SensorUnavailable(f"Malformed sample for sensor {sensor_id}: {exc}") from exc
+
+    def history(
+        self, sensor_id: str, start: datetime, policy: CallPolicy = ADMIN_POLICY, limit: int = HISTORY_LIMIT
+    ) -> tuple[list[Reading], bool]:
+        """Samples from ``start`` until now, oldest first, and whether the API truncated them.
+
+        Only startTime is sent: with stopTime, the live API returned no samples at all (checked
+        2026-10-17). startTime plus newest-first ordering is all this needs.
+        """
+        body = {
+            "sensors": [sensor_id],
+            "startTime": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "limit": limit,
+        }
+        data = self._authed("/samples", body, policy)
+        readings = []
+        for sample in (data.get("sensors") or {}).get(sensor_id) or []:
+            try:
+                readings.append(Reading(
+                    sensor_id=sensor_id,
+                    observed_at=_parse_time(sample["observed"]),
+                    temperature_f=float(sample["temperature"]),
+                    humidity=_optional_float(sample.get("humidity")),
+                    pressure=_optional_float(sample.get("barometric_pressure")),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue  # one bad sample shouldn't blank the whole chart
+        readings.sort(key=lambda r: r.observed_at)
+        truncated = bool(data.get("truncated")) or len(readings) >= limit
+        return readings, truncated
 
     def sensors(self, policy: CallPolicy = ADMIN_POLICY) -> list[SensorInfo]:
         data = self._authed("/devices/sensors", {}, policy)
