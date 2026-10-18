@@ -14,8 +14,10 @@ ROLE_SECRETS = {
 
 
 ROLE_ENV = {
-    "worker": ("PROJECT_ID", "FIRESTORE_DATABASE", "WORKER_AUDIENCE", "SCHEDULER_SERVICE_ACCOUNT"),
-    "admin": ("PROJECT_ID", "FIRESTORE_DATABASE", "IAP_AUDIENCE", "ADMIN_EMAILS"),
+    "worker": (
+        "PROJECT_ID", "FIRESTORE_DATABASE", "WORKER_AUDIENCE", "SCHEDULER_SERVICE_ACCOUNT", "ALERT_POLICIES",
+    ),
+    "admin": ("PROJECT_ID", "FIRESTORE_DATABASE", "IAP_AUDIENCE", "ADMIN_EMAILS", "ALERT_POLICIES"),
 }
 
 
@@ -57,6 +59,11 @@ def env(name: str) -> str:
 
 def project_id() -> str:
     return env("PROJECT_ID")
+
+
+def alert_policies() -> tuple[str, ...]:
+    """The alert policies a season pause snoozes: comma-separated full resource names."""
+    return tuple(p.strip() for p in env("ALERT_POLICIES").split(",") if p.strip())
 
 
 def read_secret(client, project: str, secret_id: str) -> str:

@@ -10,7 +10,7 @@ import copy
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from greenhouse import actuation, appconfig
@@ -130,6 +130,63 @@ class Store:
 
         return self._transact([CONFIG], write)
 
+    def set_control_enabled(self, enabled: bool, actor: str, now: datetime) -> bool:
+        """Flip the season switch. Returns False when it was already set that way.
+
+        Every flip invalidates the alert snoozes (see greenhouse.alerts). Resuming also marks the
+        command state uncertain, because the fans may have been run by hand while control was off,
+        so the first eligible tick sends the desired state even inside the reassert interval.
+        """
+
+        def write(d):
+            config = appconfig.from_dict(d[CONFIG])
+            if config.control_enabled == enabled:
+                return {}, False
+            config = replace(
+                config,
+                control_enabled=enabled,
+                alerts_revision=config.alerts_revision + 1,
+                alerts_in_sync=False,
+            )
+            writes = {CONFIG: appconfig.to_dict(config)}
+            if enabled:
+                doc = replace(actuation.from_dict(d[CONTROLLER]), command_state_uncertain=True)
+                writes[CONTROLLER] = actuation.to_dict(doc)
+            path, event = _event("control_resumed" if enabled else "control_paused", actor, now)
+            writes[path] = event
+            return writes, True
+
+        return self._transact([CONFIG, CONTROLLER], write)
+
+    def alerts_begin(self) -> tuple[int, bool]:
+        """(revision, paused) for a snooze reconcile to work towards."""
+
+        def read(d):
+            config = appconfig.from_dict(d[CONFIG])
+            return {}, (config.alerts_revision, not config.control_enabled)
+
+        return self._transact([CONFIG], read)
+
+    def alerts_finish(self, revision: int, ok: bool, now: datetime) -> bool:
+        """Close a snooze reconcile that started at ``revision``. Returns whether it marked sync.
+
+        It marks sync only if nothing (a flip or another reconcile's close) happened since it started,
+        and it always bumps the revision, so a second overlapping reconcile can't mark sync either.
+        """
+
+        def write(d):
+            config = appconfig.from_dict(d[CONFIG])
+            synced = ok and config.alerts_revision == revision
+            config = replace(
+                config,
+                alerts_revision=config.alerts_revision + 1,
+                alerts_in_sync=synced,
+                alerts_swept_at=now,
+            )
+            return {CONFIG: appconfig.to_dict(config)}, synced
+
+        return self._transact([CONFIG], write)
+
     def set_override(self, on: bool, expires_at: datetime, actor: str, now: datetime) -> None:
         def write(d):
             path, event = _event("override_set", actor, now, {"on": on, "expires_at": expires_at})
@@ -227,7 +284,7 @@ class Store:
                 decision.state.temp_demand,
                 decision.state.baselined,
                 config.reassert_after,
-                config.actuation_enabled,
+                config.actuation_enabled and config.control_enabled,
             )
             status = dict(
                 status_extra,
@@ -250,6 +307,16 @@ class Store:
 
         return self._transact([CONFIG, CONTROLLER, OVERRIDE], write)
 
+    def tick_paused(self, tick_id: str, now: datetime) -> None:
+        """Record a tick that did nothing because the season is paused."""
+
+        def write(d):
+            if not actuation.owns_lease(actuation.from_dict(d[CONTROLLER]), tick_id, now):
+                raise actuation.LeaseLost(tick_id)
+            return {STATUS: {"paused": True, "updated_at": now, "tick_id": tick_id}}, None
+
+        self._transact([CONTROLLER], write)
+
     def tick_guard(self, tick_id: str, generation: int, now: datetime, budget_ok: bool) -> str | None:
         def write(d):
             config = appconfig.from_dict(d[CONFIG])
@@ -260,6 +327,7 @@ class Store:
                 now,
                 config.actuation_enabled,
                 budget_ok,
+                config.control_enabled,
             )
             return {CONTROLLER: actuation.to_dict(doc)}, refusal
 

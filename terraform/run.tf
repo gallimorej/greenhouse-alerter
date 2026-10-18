@@ -13,6 +13,13 @@ locals {
   common_env = {
     PROJECT_ID         = var.project_id
     FIRESTORE_DATABASE = var.firestore_database
+    # Every alert policy, snoozed together while the season is paused.
+    ALERT_POLICIES = join(",", [
+      google_monitoring_alert_policy.tick_errors.name,
+      google_monitoring_alert_policy.stale_reading.name,
+      google_monitoring_alert_policy.no_successful_tick.name,
+      google_monitoring_alert_policy.ifttt_failures.name,
+    ])
   }
 }
 

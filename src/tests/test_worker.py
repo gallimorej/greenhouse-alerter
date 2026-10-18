@@ -4,9 +4,11 @@ from datetime import timedelta
 import pytest
 
 from greenhouse import actuation, appconfig
+from greenhouse.alerts import SWEEP_EVERY, Snoozer, sync_snoozes
+from greenhouse.controller import Settings
 from greenhouse.store import CONFIG, CONTROLLER, STATUS
 from greenhouse.worker import Deadline, run_tick
-from tests.fakes import Clock, FakeFans, FakeSensors, utc
+from tests.fakes import Clock, FakeFans, FakeSensors, FakeSnoozes, utc
 
 # 12:20 New York time, inside active hours and outside the :05-:07 cycle.
 NOON = utc(2026, 7, 15, 16, 20)
@@ -295,3 +297,211 @@ def test_every_event_expires_after_retention(make):
     events = store.recent_events()
     assert len(events) == 2
     assert all(e["expire_at"] == e["at"] + EVENT_RETENTION for e in events)
+
+
+# --- season switch and separate cycle / temperature switches -------------------------------------
+
+POLICIES = ("projects/p/alertPolicies/1", "projects/p/alertPolicies/2")
+
+
+def config(store):
+    return appconfig.from_dict(store.read_raw(CONFIG))
+
+
+def switches(cycles=True, temperature=True):
+    return Settings(cycles_enabled=cycles, temperature_control_enabled=temperature)
+
+
+def test_paused_season_reads_nothing_and_sends_nothing(make):
+    store, sensors, fans, clock = make(temp=101, control_enabled=False)
+    result = tick(store, sensors, fans, clock)
+    assert result.outcome == "paused" and fans.sent == [] and sensors.calls == 0
+    assert "sensor_fresh" not in result.detail  # never counted by the stale-reading alert
+    status = store.read_raw(STATUS)
+    assert status["paused"] is True
+    assert controller(store).lease is None
+
+
+def test_pausing_mid_tick_prevents_send(make):
+    store, sensors, fans, clock = make(temp=101)
+    original = store.tick_guard
+
+    def pause_then_guard(*args, **kwargs):
+        store.set_control_enabled(False, "jeff", clock())
+        return original(*args, **kwargs)
+
+    store.tick_guard = pause_then_guard
+    result = tick(store, sensors, fans, clock)
+    assert result.outcome == "refused" and result.detail["refusal"] == "control paused"
+    assert fans.sent == []
+
+
+def test_resume_resends_despite_the_reassert_interval(make):
+    store, sensors, fans, clock = make(temp=101)
+    tick(store, sensors, fans, clock)
+    assert fans.sent == [ON]
+    store.set_control_enabled(False, "jeff", clock())
+    clock.advance(minutes=1)
+    assert tick(store, sensors, fans, clock).outcome == "paused"
+    # The fans were run by hand while paused; ON is still desired, and the last ON was minutes ago.
+    store.set_control_enabled(True, "jeff", clock())
+    assert controller(store).command_state_uncertain
+    clock.advance(minutes=1)
+    result = tick(store, sensors, fans, clock)
+    assert result.outcome == "sent" and fans.sent == [ON, ON]
+    assert not controller(store).command_state_uncertain
+
+
+def test_set_control_enabled_is_audited_and_idempotent(make):
+    store, sensors, fans, clock = make()
+    assert store.set_control_enabled(False, "jeff", clock()) is True
+    assert store.set_control_enabled(False, "jeff", clock()) is False
+    c = config(store)
+    assert c.control_enabled is False and c.alerts_in_sync is False and c.alerts_revision == 1
+    assert [e["kind"] for e in store.recent_events()] == ["control_paused"]
+
+
+def test_cycles_only_runs_without_a_sensor_or_baseline(make):
+    store, sensors, fans, clock = make(sensor=None, controller=switches(temperature=False))
+    clock.t = utc(2026, 7, 15, 16, 5)  # 12:05 local, cycle starts
+    result = tick(store, sensors, fans, clock)
+    assert result.outcome == "sent" and fans.sent == [ON]
+    assert result.detail["reason"] == "scheduled cycle"
+    assert result.detail["temperature_control"] is False  # so the stale-reading alert ignores it
+    clock.advance(minutes=2)
+    tick(store, sensors, fans, clock)
+    assert fans.sent == [ON, OFF]
+    assert tick(store, sensors, fans, clock).detail["reason"] == "temperature control off"
+
+
+def test_temperature_control_off_ignores_heat(make):
+    store, sensors, fans, clock = make(temp=105, controller=switches(temperature=False))
+    result = tick(store, sensors, fans, clock)
+    assert result.detail["desired_on"] is False and fans.sent == [OFF]
+
+
+def test_tick_log_marks_temperature_control_on(make):
+    store, sensors, fans, clock = make(temp=80)
+    detail = tick(store, sensors, fans, clock).detail
+    assert detail["temperature_control"] is True and detail["control_enabled"] is True
+
+
+# --- alert snoozes -----------------------------------------------------------------------------
+
+def test_pause_then_resume_snoozes_then_ends(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes()
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    assert snoozer.reconcile(store, clock()) is True
+    assert len(api.running(clock())) == 1 and api.created == [POLICIES]
+    assert config(store).alerts_in_sync
+    assert snoozer.reconcile(store, clock()) is True  # idempotent: no second snooze
+    assert len(api.snoozes) == 1
+    clock.advance(hours=1)
+    store.set_control_enabled(True, "jeff", clock())
+    assert snoozer.reconcile(store, clock()) is True
+    assert api.running(clock()) == []
+
+
+def test_lost_create_response_is_found_not_duplicated(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes(lose_create_response=True)
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    assert snoozer.reconcile(store, clock()) is False
+    assert config(store).alerts_in_sync is False
+    api.lose_create_response = False
+    assert snoozer.reconcile(store, clock()) is True
+    assert len(api.snoozes) == 1
+
+
+def test_failed_resume_is_healed_by_the_next_tick(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes()
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    snoozer.reconcile(store, clock())
+    clock.advance(hours=1)
+    store.set_control_enabled(True, "jeff", clock())
+    api.fail = True
+    assert snoozer.reconcile(store, clock()) is False  # the admin's attempt
+    assert config(store).alerts_in_sync is False
+    api.fail = False
+    clock.advance(minutes=1)
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert config(store).alerts_in_sync
+    assert api.running(clock()) == []
+
+
+def test_quick_resume_stays_out_of_sync_until_the_snooze_really_ends(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes(min_length=timedelta(seconds=61))  # the API refuses to end it this soon
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    snoozer.reconcile(store, clock())
+    clock.advance(seconds=20)
+    store.set_control_enabled(True, "jeff", clock())
+    assert snoozer.reconcile(store, clock()) is False
+    assert config(store).alerts_in_sync is False and api.running(clock())
+    clock.advance(minutes=1)
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert config(store).alerts_in_sync and api.running(clock()) == []
+
+
+@pytest.mark.parametrize("resume_closes_first", [True, False])
+def test_overlapping_reconciles_never_hide_a_stray_snooze(make, resume_closes_first):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes()
+    store.set_control_enabled(False, "jeff", clock())
+    pause_rev, paused = store.alerts_begin()  # a pause reconcile starts; its POST is slow
+    assert paused
+    store.set_control_enabled(True, "jeff", clock())
+    resume_rev, paused = store.alerts_begin()
+    assert not paused
+    assert sync_snoozes(api, POLICIES, False, clock(), 1.0) == "nothing snoozed"  # POST not landed yet
+    api.create(POLICIES, clock(), clock() + timedelta(days=400), 1.0)  # now it lands
+    closes = [(resume_rev, True), (pause_rev, True)]
+    for revision, ok in closes if resume_closes_first else reversed(closes):
+        store.alerts_finish(revision, ok, clock())
+    assert config(store).alerts_in_sync is False
+    clock.advance(minutes=1)
+    tick(store, sensors, fans, clock, alerts=Snoozer(api, POLICIES))
+    assert config(store).alerts_in_sync
+    assert api.running(clock()) == []
+
+
+def test_sweep_ends_a_snooze_left_by_a_crash(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes()
+    snoozer = Snoozer(api, POLICIES)
+    tick(store, sensors, fans, clock, alerts=snoozer)  # first sweep
+    swept = config(store).alerts_swept_at
+    assert swept == clock()
+    # A crashed instance's snooze, created after the last sweep, with sync still marked.
+    api.create(POLICIES, clock(), clock() + timedelta(days=400), 1.0)
+    clock.advance(minutes=5)
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert len(api.running(clock())) == 1  # not due yet
+    clock.t = swept + SWEEP_EVERY
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert api.running(clock()) == []
+
+
+def test_paused_ticks_extend_a_snooze_near_its_end(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes()
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    snoozer.reconcile(store, clock())
+    end = api.snoozes[0].end
+    clock.t = end - timedelta(hours=12)
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert len(api.snoozes) == 2 and api.running(end + timedelta(minutes=1))
+
+
+def test_snooze_failure_never_fails_the_tick(make):
+    store, sensors, fans, clock = make(temp=101)
+    api = FakeSnoozes(fail=True)
+    result = tick(store, sensors, fans, clock, alerts=Snoozer(api, POLICIES))
+    assert result.outcome == "sent" and fans.sent == [ON]

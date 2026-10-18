@@ -1,7 +1,7 @@
 """Runtime configuration stored in Firestore (``config/settings``), editable without a deploy."""
 
 from dataclasses import asdict, dataclass, field, fields, replace
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 
 from greenhouse.controller import Settings
 
@@ -18,6 +18,15 @@ class AppConfig:
     # The worker fetches a sample this often and reuses the last one in between. Three minutes leaves
     # the admin pages a window between fetches that is at least a minute from each.
     sensor_poll_interval: timedelta = timedelta(minutes=3)
+    # The season switch. Off: the worker sends nothing, doesn't read the sensor, and every alert is
+    # snoozed (greenhouse.alerts). Unlike actuation_enabled, it isn't the emergency stop.
+    control_enabled: bool = True
+    # Whether the alert snoozes match control_enabled. Every season flip and every finished
+    # reconcile bumps alerts_revision; a reconcile marks sync only if the revision is unchanged since
+    # it started, so overlapping reconciles can't hide a stray snooze. See greenhouse.alerts.
+    alerts_revision: int = 0
+    alerts_in_sync: bool = True
+    alerts_swept_at: datetime | None = None
 
     def event_for(self, on: bool) -> str:
         return self.ifttt_on_event if on else self.ifttt_off_event
@@ -63,7 +72,16 @@ def from_dict(data: dict | None) -> AppConfig:
         kwargs[f.name] = value
     config = AppConfig(controller=Settings(**kwargs))
     updates = {}
-    for key in ("actuation_enabled", "active_sensor_id", "ifttt_on_event", "ifttt_off_event"):
+    for key in (
+        "actuation_enabled",
+        "active_sensor_id",
+        "ifttt_on_event",
+        "ifttt_off_event",
+        "control_enabled",
+        "alerts_revision",
+        "alerts_in_sync",
+        "alerts_swept_at",
+    ):
         if key in data:
             updates[key] = data[key]
     if "reassert_after_minutes" in data:

@@ -146,6 +146,7 @@ def guard_dispatch(
     now: datetime,
     actuation_enabled: bool,
     budget_ok: bool,
+    control_enabled: bool = True,
 ) -> tuple[ControllerDoc, str | None]:
     """Last check before sending. Returns (doc, refusal reason); a None reason means send."""
     if not owns_lease(doc, tick_id, now):
@@ -154,6 +155,8 @@ def guard_dispatch(
         refusal = "lease too close to expiry"
     elif not actuation_enabled:
         refusal = "actuation disabled"
+    elif not control_enabled:
+        refusal = "control paused"
     elif not budget_ok:
         refusal = "execution budget exhausted"
     elif doc.generation != generation:
