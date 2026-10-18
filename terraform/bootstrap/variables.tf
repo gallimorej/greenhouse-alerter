@@ -18,12 +18,6 @@ variable "region" {
   default     = "us-east1"
 }
 
-variable "github_repository" {
-  description = "GitHub repository (owner/name) allowed to deploy"
-  type        = string
-  default     = "gallimorej/greenhouse-alerter"
-}
-
 variable "github_repository_id" {
   description = "Numeric GitHub repository ID; pinning to it means a renamed or re-created repo can't inherit trust"
   type        = string

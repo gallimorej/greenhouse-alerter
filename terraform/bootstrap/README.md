@@ -20,6 +20,7 @@ Then move the state into the bucket it just created:
 ```sh
 mv backend.tf.next backend.tf
 terraform init -migrate-state
+terraform plan    # expect "No changes": the state moved intact
 ```
 
 ## Secret values
@@ -47,8 +48,10 @@ Console → Security → Identity-Aware Proxy → configure OAuth → **Auto gen
 
 ## GitHub
 
-Set these repository variables (not secrets; they aren't sensitive). The deploy job stays skipped
-until `GCP_WORKLOAD_IDENTITY_PROVIDER` is set.
+Set these repository variables (not secrets; they aren't sensitive). The old key-based deploy
+workflow is removed in this change, so nothing deploys yet. The Cloud Run deploy job (added with
+the Cloud Run services) runs only on pushes to `main` and stays skipped until
+`GCP_WORKLOAD_IDENTITY_PROVIDER` is set.
 
 | Variable | Value |
 |---|---|
