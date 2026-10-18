@@ -1,34 +1,40 @@
 # Greenhouse Alerter
 
-Greenhouse Alerter is a Python application to monitor the temperature of a SensorPush sensor and turn a smart switch on and off to control fans based on configurable temperature thresholds.
+Greenhouse Alerter keeps a greenhouse cool. It reads a SensorPush sensor and switches the fans on and off through IFTTT Webhooks, based on temperature thresholds, active hours and an hourly air-circulation cycle.
 
-## Getting Started
+The project is moving from App Engine to Cloud Run. This branch holds the core library: the decision rules (`src/greenhouse/controller.py`), the SensorPush client (`sensors.py`), the IFTTT client (`fans.py`) and secret loading (`config.py`). The Cloud Run worker and admin services come next.
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+## Development
 
-### Prerequisites
+Requires Python 3.12+.
 
-You will need Python and pip installed on your system. You can download Python from [here](https://www.python.org/downloads/) and pip is included in Python 3.4 and later versions.
+```sh
+python3.12 -m venv .venv
+. .venv/bin/activate
+pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+```
 
-### Installation
+On Apple Silicon, if the terminal runs under Rosetta, create and run the venv with `arch -arm64` so native wheels install.
 
-1. Clone the repository:
-`git clone https://github.com/gallimorej/greenhouse-alerter.git`
+### Running the tests
 
-2. Navigate to the project directory:
-`cd greenhouse-alerter`
+```sh
+python -m pytest
+```
 
-3. Install the required dependencies:
-`pip install -r requirements.txt`
+### Updating dependencies
 
+Edit `requirements.in` or `requirements-dev.in`, then regenerate the pinned, hashed files with pip-tools:
 
-## Usage
+```sh
+pip-compile --generate-hashes --strip-extras --allow-unsafe -o requirements.txt requirements.in
+pip-compile --generate-hashes --strip-extras --allow-unsafe -o requirements-dev.txt requirements-dev.in
+```
 
-[TODO] Provide instructions on how to use your project. Include code examples if applicable.
+## Infrastructure
 
-## Running the Tests
-
-[TODO] Explain how to run the automated tests for this system.
+- `terraform/bootstrap/`: one-time privileged setup, applied by a project owner (see its README).
+- `terraform/`: the main configuration, with remote state in the bootstrap bucket.
 
 ## License
 

@@ -1,0 +1,10 @@
+[project]
+name = "greenhouse-alerter"
+version = "0.2.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+pythonpath = ["src"]
+addopts = "--strict-markers --strict-config"
+filterwarnings = ["error"]
