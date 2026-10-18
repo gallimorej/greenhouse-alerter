@@ -29,10 +29,6 @@ SNOOZE_NAME = "greenhouse-season-pause"
 # of ending.
 SNOOZE_LENGTH = timedelta(days=400)
 EXTEND_WITHIN = timedelta(days=1)
-# A snooze's end must be at least a minute after its start, so a just-created one ends that minute.
-MIN_SNOOZE = timedelta(seconds=61)
-# A snooze ending this soon counts as ended: one we just ended may run on for up to MIN_SNOOZE.
-ENDING = timedelta(minutes=2)
 SWEEP_EVERY = timedelta(minutes=15)
 
 API = "https://monitoring.googleapis.com/v3"
@@ -132,9 +128,11 @@ def sync_snoozes(api: SnoozeApi, policies: Sequence[str], paused: bool, now: dat
             return "already snoozed"
         api.create(policies, now, now + SNOOZE_LENGTH, timeout_s)
         return "snoozed"
-    running = [s for s in mine if s.end > now + ENDING]
+    # Ended by setting the end time to now. If the API refuses (a snooze's end may have to be a minute
+    # after its start), the pass fails and the alerts stay out of sync until a later pass ends it.
+    running = [s for s in mine if s.end > now]
     for s in running:
-        api.end(s, max(now, s.start + MIN_SNOOZE), timeout_s)
+        api.end(s, now, timeout_s)
     return f"ended {len(running)}" if running else "nothing snoozed"
 
 

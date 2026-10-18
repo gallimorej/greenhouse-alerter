@@ -89,6 +89,8 @@ class FakeSnoozes:
     # The POST lands but its response is lost, as with a timeout after the server committed.
     lose_create_response: bool = False
     created: list[tuple] = field(default_factory=list)
+    # Refuse an end time less than this after the start, as the API may.
+    min_length: timedelta = timedelta(0)
 
     def list(self, timeout_s):
         if self.fail:
@@ -106,6 +108,8 @@ class FakeSnoozes:
     def end(self, snooze, end, timeout_s):
         if self.fail:
             raise AlertsError("snooze PATCH returned 503")
+        if end - snooze.start < self.min_length:
+            raise AlertsError("snooze PATCH returned 400")
         self.snoozes = [replace(s, end=end) if s.name == snooze.name else s for s in self.snoozes]
 
     def running(self, now):

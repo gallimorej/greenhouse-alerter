@@ -401,7 +401,7 @@ def test_pause_then_resume_snoozes_then_ends(make):
     clock.advance(hours=1)
     store.set_control_enabled(True, "jeff", clock())
     assert snoozer.reconcile(store, clock()) is True
-    assert api.running(clock() + timedelta(minutes=2)) == []
+    assert api.running(clock()) == []
 
 
 def test_lost_create_response_is_found_not_duplicated(make):
@@ -431,7 +431,22 @@ def test_failed_resume_is_healed_by_the_next_tick(make):
     clock.advance(minutes=1)
     tick(store, sensors, fans, clock, alerts=snoozer)
     assert config(store).alerts_in_sync
-    assert api.running(clock() + timedelta(minutes=2)) == []
+    assert api.running(clock()) == []
+
+
+def test_quick_resume_stays_out_of_sync_until_the_snooze_really_ends(make):
+    store, sensors, fans, clock = make()
+    api = FakeSnoozes(min_length=timedelta(seconds=61))  # the API refuses to end it this soon
+    snoozer = Snoozer(api, POLICIES)
+    store.set_control_enabled(False, "jeff", clock())
+    snoozer.reconcile(store, clock())
+    clock.advance(seconds=20)
+    store.set_control_enabled(True, "jeff", clock())
+    assert snoozer.reconcile(store, clock()) is False
+    assert config(store).alerts_in_sync is False and api.running(clock())
+    clock.advance(minutes=1)
+    tick(store, sensors, fans, clock, alerts=snoozer)
+    assert config(store).alerts_in_sync and api.running(clock()) == []
 
 
 @pytest.mark.parametrize("resume_closes_first", [True, False])
@@ -453,7 +468,7 @@ def test_overlapping_reconciles_never_hide_a_stray_snooze(make, resume_closes_fi
     clock.advance(minutes=1)
     tick(store, sensors, fans, clock, alerts=Snoozer(api, POLICIES))
     assert config(store).alerts_in_sync
-    assert api.running(clock() + timedelta(minutes=2)) == []
+    assert api.running(clock()) == []
 
 
 def test_sweep_ends_a_snooze_left_by_a_crash(make):
@@ -467,10 +482,10 @@ def test_sweep_ends_a_snooze_left_by_a_crash(make):
     api.create(POLICIES, clock(), clock() + timedelta(days=400), 1.0)
     clock.advance(minutes=5)
     tick(store, sensors, fans, clock, alerts=snoozer)
-    assert len(api.running(clock() + timedelta(minutes=2))) == 1  # not due yet
+    assert len(api.running(clock())) == 1  # not due yet
     clock.t = swept + SWEEP_EVERY
     tick(store, sensors, fans, clock, alerts=snoozer)
-    assert api.running(clock() + timedelta(minutes=2)) == []
+    assert api.running(clock()) == []
 
 
 def test_paused_ticks_extend_a_snooze_near_its_end(make):

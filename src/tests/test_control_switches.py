@@ -150,13 +150,13 @@ def test_sync_ends_only_our_running_snoozes():
     assert ends["projects/p/snoozes/b"] == now + timedelta(days=99)
 
 
-def test_just_created_snooze_ends_a_minute_after_it_started():
+def test_a_snooze_is_ended_now_even_just_after_it_started():
     start = NOON
     api = FakeSnoozes(snoozes=[Snooze("projects/p/snoozes/a", "greenhouse-season-pause", start, start + timedelta(days=400))])
-    sync_snoozes(api, POLICIES, False, start + timedelta(seconds=10), 1.0)
-    assert api.snoozes[0].end == start + timedelta(seconds=61)
-    # Ending within ENDING counts as ended, so the next pass doesn't keep patching it.
-    assert sync_snoozes(api, POLICIES, False, start + timedelta(seconds=20), 1.0) == "nothing snoozed"
+    now = start + timedelta(seconds=10)
+    assert sync_snoozes(api, POLICIES, False, now, 1.0) == "ended 1"
+    assert api.snoozes[0].end == now
+    assert sync_snoozes(api, POLICIES, False, now + timedelta(seconds=1), 1.0) == "nothing snoozed"
 
 
 def test_parse_timestamp_handles_nanoseconds():
@@ -320,7 +320,7 @@ def test_pause_snoozes_and_resume_ends(admin, store, snoozes, clock):
     clock.advance(hours=2)
     html = post(admin, "/admin/season", {"active": "on"}).get_data(as_text=True)
     assert "Control resumed" in html
-    assert snoozes.running(clock() + timedelta(minutes=2)) == []
+    assert snoozes.running(clock()) == []
     assert [e["kind"] for e in store.recent_events()][:2] == ["control_resumed", "control_paused"]
 
 
