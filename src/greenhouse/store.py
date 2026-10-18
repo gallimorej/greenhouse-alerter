@@ -26,6 +26,7 @@ BUDGET = "sensorpush/budget"
 LINK_CHECK = "sensorpush/link_check"
 EVENTS = "events"
 
+BUDGET_WINDOW = timedelta(seconds=60)
 # Ticks run about a minute apart, so a fetch is due slightly before a full interval has passed.
 POLL_SLACK = timedelta(seconds=15)
 # If the worker hasn't fetched for this long past its interval (no sensor linked, job paused), it
@@ -130,30 +131,33 @@ class Store:
     # --- SensorPush call budget -------------------------------------------------------------
 
     def consume_sensorpush_call(self, caller: str, now: datetime) -> bool:
-        """Take one SensorPush call from the shared per-minute cap, if it's this caller's turn.
+        """Take one SensorPush call from the shared cap, if it's this caller's turn.
 
-        The worker may call only once its poll interval has passed. While the worker is running and
-        its fetch is due, admin pages wait, so they can't starve the controller of readings.
+        The cap counts calls in any rolling 60 seconds, not per clock minute. The worker may call
+        only once its poll interval has passed. While the worker is running, an admin call that
+        would leave no room for the worker's next fetch is refused, so admin pages can't starve the
+        controller of readings.
         """
 
         def write(d):
             config = appconfig.from_dict(d[CONFIG])
             budget = d[BUDGET] or {}
-            minute = now.strftime("%Y-%m-%dT%H:%M")
-            calls = budget.get("calls", 0) if budget.get("minute") == minute else 0
+            recent = [t for t in budget.get("recent", []) if now - t < BUDGET_WINDOW]
+            if len(recent) >= config.sensorpush_calls_per_minute:
+                return {}, False
             last_worker = budget.get("last_worker_at")
             since = None if last_worker is None else now - last_worker
             worker_due = since is None or since >= config.sensor_poll_interval - POLL_SLACK
             if caller == "worker" and not worker_due:
                 return {}, False
             worker_running = since is not None and since < config.sensor_poll_interval + WORKER_IDLE_AFTER
-            if caller == "admin" and worker_due and worker_running:
-                return {}, False
-            if calls >= config.sensorpush_calls_per_minute:
-                return {}, False
+            if caller == "admin" and worker_running:
+                next_fetch = last_worker + config.sensor_poll_interval - POLL_SLACK
+                fills_cap = len(recent) + 1 >= config.sensorpush_calls_per_minute
+                if fills_cap and next_fetch - now < BUDGET_WINDOW:
+                    return {}, False
             budget = {
-                "minute": minute,
-                "calls": calls + 1,
+                "recent": recent + [now],
                 "last_worker_at": now if caller == "worker" else last_worker,
             }
             return {BUDGET: budget}, True

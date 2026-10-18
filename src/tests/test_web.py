@@ -160,6 +160,8 @@ def test_sensors_page_lists_sensors_then_gateways_a_minute_later(admin, clock, s
     page = admin.get("/admin/sensors", headers=ADMIN).get_data(as_text=True)
     assert "Greenhouse HTP.xw" in page and "Greenhouse Gateway" in page
     assert sensors.calls == 2  # the sensor list came from the cache
+    # One granted call is one HTTP attempt: admin pages never retry.
+    assert all(p.attempts == 1 for p in sensors.policies)
 
 
 def test_link_flow_shows_live_reading_then_links(admin, store):

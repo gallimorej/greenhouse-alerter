@@ -239,17 +239,28 @@ def test_new_sensor_waits_for_its_first_fetch(make):
     assert tick(store, sensors, fans, clock).detail["temperature_f"] == 101
 
 
-def test_sensorpush_calls_share_one_per_minute(make):
-    store, *_ = make(sensor_poll_interval=timedelta(minutes=2))
+def test_sensorpush_calls_share_one_per_rolling_minute(make):
+    store, *_ = make(sensor_poll_interval=timedelta(minutes=3))
     t0 = NOON
-    assert store.consume_sensorpush_call("worker", t0)
-    assert not store.consume_sensorpush_call("admin", t0)  # this minute's call is used
-    assert not store.consume_sensorpush_call("worker", t0 + timedelta(minutes=1))  # not due yet
-    assert store.consume_sensorpush_call("admin", t0 + timedelta(minutes=1))
-    assert not store.consume_sensorpush_call("admin", t0 + timedelta(minutes=1, seconds=30))
-    # The worker's fetch is due: admin pages wait for it.
-    assert not store.consume_sensorpush_call("admin", t0 + timedelta(minutes=2))
-    assert store.consume_sensorpush_call("worker", t0 + timedelta(minutes=2))
+
+    def at(seconds):
+        return t0 + timedelta(seconds=seconds)
+
+    assert store.consume_sensorpush_call("worker", at(0))
+    assert not store.consume_sensorpush_call("admin", at(30))  # within 60 s of the worker's call
+    assert not store.consume_sensorpush_call("worker", at(60))  # not due yet
+    assert store.consume_sensorpush_call("admin", at(60))
+    assert not store.consume_sensorpush_call("admin", at(110))  # within 60 s of the last call
+    # 65 s after the last call, but the worker's next fetch (at 165 s) is under a minute away.
+    assert not store.consume_sensorpush_call("admin", at(125))
+    assert store.consume_sensorpush_call("worker", at(165))
+
+
+def test_cap_holds_across_a_clock_minute_boundary(make):
+    store, *_ = make(sensor=None)
+    assert store.consume_sensorpush_call("admin", utc(2026, 7, 15, 16, 20, 59))
+    assert not store.consume_sensorpush_call("admin", utc(2026, 7, 15, 16, 21, 0))
+    assert store.consume_sensorpush_call("admin", utc(2026, 7, 15, 16, 21, 59))
 
 
 def test_admin_pages_stop_yielding_to_an_idle_worker(make):

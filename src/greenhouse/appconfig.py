@@ -15,12 +15,12 @@ class AppConfig:
     reassert_after: timedelta = timedelta(minutes=30)
     ifttt_on_event: str = "start_greenhouse_fans"
     ifttt_off_event: str = "stop_greenhouse_fans"
-    # SensorPush asks for no more than one API request a minute, so this cap is shared by the worker
-    # and the admin pages.
+    # SensorPush asks for no more than one API request a minute, so this cap, over any rolling
+    # 60 seconds, is shared by the worker and the admin pages.
     sensorpush_calls_per_minute: int = 1
-    # The worker fetches a sample this often and reuses the last one in between, which leaves the
-    # other minutes for the admin pages.
-    sensor_poll_interval: timedelta = timedelta(minutes=2)
+    # The worker fetches a sample this often and reuses the last one in between. Three minutes leaves
+    # the admin pages a window between fetches that is at least a minute from each.
+    sensor_poll_interval: timedelta = timedelta(minutes=3)
 
     def event_for(self, on: bool) -> str:
         return self.ifttt_on_event if on else self.ifttt_off_event

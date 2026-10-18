@@ -1,5 +1,6 @@
 locals {
-  runtime_sa   = "greenhouse-runtime@${var.project_id}.iam.gserviceaccount.com"
+  worker_sa    = "greenhouse-worker@${var.project_id}.iam.gserviceaccount.com"
+  admin_sa     = "greenhouse-admin@${var.project_id}.iam.gserviceaccount.com"
   scheduler_sa = "greenhouse-scheduler@${var.project_id}.iam.gserviceaccount.com"
   iap_agent    = "service-${var.project_number}@gcp-sa-iap.iam.gserviceaccount.com"
 
@@ -21,7 +22,7 @@ resource "google_cloud_run_v2_service" "worker" {
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
-    service_account                  = local.runtime_sa
+    service_account                  = local.worker_sa
     timeout                          = "30s"
     max_instance_request_concurrency = 1
 
@@ -72,7 +73,7 @@ resource "google_cloud_run_v2_service" "admin" {
   iap_enabled = true
 
   template {
-    service_account                  = local.runtime_sa
+    service_account                  = local.admin_sa
     timeout                          = "30s"
     max_instance_request_concurrency = 10
 

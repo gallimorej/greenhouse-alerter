@@ -20,7 +20,7 @@ from greenhouse import controller
 from greenhouse.actuation import LeaseHeld
 from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier, parse_allowlist
 from greenhouse.fans import IftttClient
-from greenhouse.sensors import ADMIN_POLICY, SensorPushClient, SensorSource, SensorUnavailable
+from greenhouse.sensors import CallPolicy, SensorPushClient, SensorSource, SensorUnavailable
 from greenhouse.models import Reading
 from greenhouse.store import LINK_CHECK, Store
 from greenhouse.worker import run_tick
@@ -102,6 +102,8 @@ def require_iap_user():
         abort(403)
 
 
+# One granted SensorPush call is one HTTP attempt, so admin pages don't retry.
+ADMIN_CALL = CallPolicy(timeout_s=10.0, attempts=1)
 # How long a passed link test stays valid for confirming it.
 LINK_CHECK_VALID = timedelta(minutes=5)
 # Account sensor and gateway listings are cached, so with one SensorPush call a minute a reload can
@@ -193,7 +195,7 @@ def _listing(name: str, fetch, quiet: bool):
         return hit[1]
     if not _admin_sensor_call(quiet=quiet):
         return None
-    value = fetch(ADMIN_POLICY)
+    value = fetch(ADMIN_CALL)
     cache[name] = (now + LISTING_TTL, value)
     return value
 
@@ -204,7 +206,7 @@ def _fresh_reading(sensor_id: str):
     if not _admin_sensor_call():
         return None, "rate limited"
     try:
-        reading = s.sensors.latest_reading(sensor_id, ADMIN_POLICY)
+        reading = s.sensors.latest_reading(sensor_id, ADMIN_CALL)
     except SensorUnavailable as exc:
         return None, str(exc)
     stale_after = s.store.get_config().controller.stale_after
