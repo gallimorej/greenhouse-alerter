@@ -1,11 +1,14 @@
+import html
 import re
 
 import pytest
+from markupsafe import escape
 
 from greenhouse import appconfig
 from greenhouse.appconfig import AppConfig
 from greenhouse.store import CONFIG, MemoryStore
 from greenhouse.web import IAP_HEADER, Services, create_app
+from greenhouse.sensors import SensorInfo
 from tests.fakes import Clock, FakeSensors, utc
 from tests.test_admin_ui import SETTINGS_FORM
 
@@ -29,8 +32,12 @@ def store():
 
 
 @pytest.fixture
-def admin(store, clock):
-    sensors = FakeSensors(clock, temps={"s1": 85.0, "s2": 70.0})
+def sensors(clock):
+    return FakeSensors(clock, temps={"s1": 85.0, "s2": 70.0})
+
+
+@pytest.fixture
+def admin(store, sensors, clock):
     app = create_app("admin", Services(store=store, sensors=sensors, verifier=verify, secret_key="k", now=clock))
     return app.test_client()
 
@@ -45,14 +52,14 @@ def post(client, path, data):
 
 
 def link_form(sensors_page, sensor_id):
-    """The hidden fields of the sensor's Link… form, as the browser would submit them."""
+    """The hidden fields of the sensor's Link… form, decoded as the browser would submit them."""
     form = re.search(
         rf'<form method="post" action="/admin/sensors/test"[^>]*>((?:(?!</form>).)*value="{sensor_id}"(?:(?!</form>).)*)</form>',
         sensors_page,
         re.S,
     ).group(1)
     return {
-        name: value
+        name: html.unescape(value)
         for name, value in re.findall(r'name="([^"]+)" value="([^"]*)"', form)
         if name != "csrf_token"
     }
@@ -77,6 +84,15 @@ def test_linking_from_the_sensors_page_stores_and_shows_the_name(admin, store, c
     dashboard = page(admin)
     assert "<p>Greenhouse HTP.xw</p>" in dashboard
     assert '<p class="muted mono">s1</p>' in dashboard
+
+
+def test_a_name_with_html_characters_survives_the_form(admin, store, sensors, clock):
+    name = 'Tom & Jerry\'s "big" house'
+    sensors.listed = [SensorInfo("s1", name, "HTP.xw", True, 3.1, -60.0)]
+    fields, _ = link_from_sensors_page(admin, clock)
+    assert fields["sensor_name"] == name
+    assert store.get_config().active_sensor_name == name
+    assert f"<p>{escape(name)}</p>" in page(admin)
 
 
 def test_a_link_without_a_name_shows_the_id_only(admin, store):
