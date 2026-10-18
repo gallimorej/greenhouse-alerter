@@ -19,11 +19,12 @@ from flask_wtf.csrf import CSRFProtect
 from greenhouse import config as envconfig
 from greenhouse import controller, forms
 from greenhouse.chart import render as render_chart
-from greenhouse.actuation import LeaseHeld
+from greenhouse.actuation import ACCEPTED, RESEND_RESULTS, ControllerDoc, LeaseHeld
 from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier, parse_allowlist
 from greenhouse.fans import IftttClient
-from greenhouse.sensors import ADMIN_POLICY, SensorPushClient, SensorSource, SensorUnavailable
-from greenhouse.store import Store
+from greenhouse.sensors import CallPolicy, SensorPushClient, SensorSource, SensorUnavailable
+from greenhouse.models import Reading
+from greenhouse.store import EVENTS_MAX, LINK_CHECK, Store
 from greenhouse.worker import run_tick
 
 log = logging.getLogger(__name__)
@@ -103,11 +104,26 @@ def require_iap_user():
         abort(403)
 
 
-def _admin_sensor_call() -> bool:
+# One granted SensorPush call is one HTTP request, so admin pages don't retry, even after an expired
+# token.
+ADMIN_CALL = CallPolicy(timeout_s=10.0, attempts=1, reauth_retry=False)
+# How long a passed link test stays valid for confirming it.
+LINK_CHECK_VALID = timedelta(minutes=5)
+# Account sensor and gateway listings are cached, so with one SensorPush call a minute a reload can
+# fetch what the last load couldn't.
+LISTING_TTL = timedelta(minutes=3)
+
+
+def _admin_sensor_call(quiet: bool = False) -> bool:
     s = services()
     if s.store.consume_sensorpush_call("admin", s.now()):
         return True
-    flash("SensorPush rate limit for admin pages reached; try again in a minute.", "warning")
+    if not quiet:
+        flash(
+            "SensorPush allows one request a minute, shared with the fan controller. "
+            "Try again in a minute.",
+            "warning",
+        )
     return False
 
 
@@ -120,9 +136,9 @@ def dashboard():
     override = data["override"]
     if override is not None and override.expires_at <= now:
         override = None
-    changed_at = data["override_changed_at"]
-    # A manual change is applied by the next tick; until then, say so.
-    pending = bool(changed_at) and (not status or status["updated_at"] <= changed_at)
+    progress = override_progress(
+        override, data["override_changed_at"], status, data["controller"], data["config"].actuation_enabled
+    )
     return render_template(
         "dashboard.html",
         now=now,
@@ -130,10 +146,37 @@ def dashboard():
         controller=data["controller"],
         status=status,
         override=override,
-        override_pending=pending,
+        override_progress=progress,
         next_cycle=controller.next_cycle_start(now, data["config"].controller),
         events=s.store.recent_events(15),
     )
+
+
+def override_progress(
+    override, changed_at: datetime | None, status: dict, doc: ControllerDoc, actuation_enabled: bool
+) -> str | None:
+    """Where a manual change stands, judged from the command record rather than tick timestamps.
+
+    pending: no tick since the change. disabled: fan control is off, so nothing is sent.
+    applied: the last accepted command matches the override. failed: the command for it didn't go
+    through and will be resent. sending: a tick has run but no matching command is accepted yet.
+    None: nothing to report (no recent change, or back to automatic and a tick has run).
+    """
+    if changed_at is None:
+        return None
+    if override is not None and not actuation_enabled:
+        return "disabled"  # shadow mode never sends it, so don't say a tick will
+    if not status or status.get("updated_at") is None or status["updated_at"] <= changed_at:
+        return "pending"
+    if override is None:
+        return None
+    last = doc.last_command
+    if last is not None and last.on == override.on and last.result in RESEND_RESULTS - {"pending"}:
+        return "failed"
+    settled = last is None or last.result == ACCEPTED
+    if settled and doc.last_accepted_on == override.on and not doc.command_state_uncertain:
+        return "applied"
+    return "sending"
 
 
 @admin_bp.post("/override")
@@ -178,11 +221,20 @@ def save_settings():
             reassert_after=new.reassert_after,
             ifttt_on_event=new.ifttt_on_event,
             ifttt_off_event=new.ifttt_off_event,
-            sensorpush_admin_calls_per_minute=new.sensorpush_admin_calls_per_minute,
+            sensor_poll_interval=new.sensor_poll_interval,
         )
 
-    s.store.update_config(apply, g.user, "settings_changed", s.now(), {"changed": diff})
-    flash(f"Saved: {', '.join(sorted(diff))}. The next tick uses them.", "info")
+    committed = {}
+
+    def audit(old, saved):
+        # Against the config this transaction actually replaced, not the one the form was built on.
+        # A retried transaction calls this again, so the last call is the one that committed.
+        committed["diff"] = forms.settings_diff(old, saved)
+        return {"changed": committed["diff"]}
+
+    s.store.update_config(apply, g.user, "settings_changed", s.now(), audit)
+    changed = ", ".join(sorted(committed["diff"])) or "nothing new (already saved)"
+    flash(f"Saved: {changed}. The next tick uses them.", "info")
     return redirect(url_for("admin.settings"))
 
 
@@ -209,11 +261,17 @@ def history():
             readings, truncated = hit[1], hit[2]
         elif _admin_sensor_call():
             try:
-                readings, truncated = s.sensors.history(sensor_id, start, ADMIN_POLICY)
+                readings, truncated = s.sensors.history(sensor_id, start, ADMIN_CALL)
                 cache[key] = (now + HISTORY_TTL, readings, truncated)
             except SensorUnavailable as exc:
                 error = str(exc)
-    events = [e for e in s.store.events_since(start - timedelta(days=1)) if e.get("kind") == "command_accepted"]
+    # Every command in the range, plus the last one before it, which says whether the fans were on
+    # when the range starts.
+    before = s.store.last_event_before(start, "command_accepted")
+    events = [before] if before else []
+    in_range = s.store.events_since(start)
+    events += [e for e in in_range if e.get("kind") == "command_accepted"]
+    events_truncated = len(in_range) >= EVENTS_MAX
     chart = render_chart(
         readings, events, start, now, config.controller.high_f, config.controller.low_f, config.controller.timezone
     )
@@ -225,6 +283,7 @@ def history():
         ranges=list(HISTORY_RANGES),
         chart=chart,
         truncated=truncated,
+        events_truncated=events_truncated,
         error=error,
         tz=ZoneInfo(config.controller.timezone),
     )
@@ -259,13 +318,15 @@ def reconcile():
 def sensors():
     s = services()
     config = s.store.get_config()
-    sensor_list, gateways, error = [], [], None
-    if _admin_sensor_call() and _admin_sensor_call():
-        try:
-            sensor_list = sorted(s.sensors.sensors(ADMIN_POLICY), key=lambda x: x.name.lower())
-            gateways = s.sensors.gateways(ADMIN_POLICY)
-        except SensorUnavailable as exc:
-            error = str(exc)
+    # Either listing stays None when there was no SensorPush call left for it this minute.
+    sensor_list, gateways, error = None, None, None
+    try:
+        sensor_list = _listing("sensors", s.sensors.sensors, quiet=False)
+        if sensor_list is not None:
+            sensor_list = sorted(sensor_list, key=lambda x: x.name.lower())
+        gateways = _listing("gateways", s.sensors.gateways, quiet=sensor_list is None)
+    except SensorUnavailable as exc:
+        error = str(exc)
     return render_template(
         "sensors.html",
         now=s.now(),
@@ -276,13 +337,26 @@ def sensors():
     )
 
 
+def _listing(name: str, fetch, quiet: bool):
+    cache = current_app.extensions["greenhouse_listings"]
+    now = services().now()
+    hit = cache.get(name)
+    if hit and hit[0] > now:
+        return hit[1]
+    if not _admin_sensor_call(quiet=quiet):
+        return None
+    value = fetch(ADMIN_CALL)
+    cache[name] = (now + LISTING_TTL, value)
+    return value
+
+
 def _fresh_reading(sensor_id: str):
     """(reading, problem): problem is None only when the reading is fresh enough to link."""
     s = services()
     if not _admin_sensor_call():
         return None, "rate limited"
     try:
-        reading = s.sensors.latest_reading(sensor_id, ADMIN_POLICY)
+        reading = s.sensors.latest_reading(sensor_id, ADMIN_CALL)
     except SensorUnavailable as exc:
         return None, str(exc)
     stale_after = s.store.get_config().controller.stale_after
@@ -296,10 +370,39 @@ def test_sensor():
     sensor_id = request.form.get("sensor_id", "").strip()
     if not sensor_id:
         abort(400)
+    s = services()
     reading, problem = _fresh_reading(sensor_id)
+    if problem is None:
+        s.store.record_link_check(sensor_id, _reading_doc(reading), g.user, s.now())
     return render_template(
-        "link_confirm.html", now=services().now(), sensor_id=sensor_id, reading=reading, problem=problem
+        "link_confirm.html", now=s.now(), sensor_id=sensor_id, reading=reading, problem=problem
     )
+
+
+def _reading_doc(reading: Reading) -> dict:
+    return {
+        "observed_at": reading.observed_at,
+        "temperature_f": reading.temperature_f,
+        "humidity": reading.humidity,
+        "pressure": reading.pressure,
+    }
+
+
+def _passed_link_check(sensor_id: str) -> tuple[dict | None, str | None]:
+    """(reading, problem) from this admin's own recent link test, checked again against now."""
+    s = services()
+    check = s.store.read_raw(LINK_CHECK)
+    now = s.now()
+    if not check or check["sensor_id"] != sensor_id or check["actor"] != g.user:
+        return None, "test the sensor first"
+    if now - check["checked_at"] > LINK_CHECK_VALID:
+        return None, "the test reading has expired; test the sensor again"
+    reading = check["reading"]
+    stale_after = s.store.get_config().controller.stale_after
+    observed = Reading(sensor_id, reading["observed_at"], reading["temperature_f"])
+    if not controller.is_fresh(observed, now, stale_after):
+        return None, "the test reading is no longer fresh; test the sensor again"
+    return reading, None
 
 
 @admin_bp.post("/sensors/link")
@@ -308,8 +411,9 @@ def link_sensor():
     sensor_id = request.form.get("sensor_id", "").strip()
     if not sensor_id:
         abort(400)
-    # Re-checked here, not trusted from the confirm page.
-    reading, problem = _fresh_reading(sensor_id)
+    # Checked against the server-side record of the test, not trusted from the confirm page; that saves
+    # a second SensorPush call.
+    reading, problem = _passed_link_check(sensor_id)
     if problem:
         flash(f"Not linked: {problem}.", "error")
         return redirect(url_for("admin.sensors"))
@@ -319,7 +423,7 @@ def link_sensor():
         g.user,
         "sensor_linked",
         s.now(),
-        {"sensor_id": sensor_id, "previous": previous, "temperature_f": reading.temperature_f},
+        {"sensor_id": sensor_id, "previous": previous, "temperature_f": reading["temperature_f"]},
     )
     flash("Sensor linked. The next tick will use it.", "info")
     return redirect(url_for("admin.dashboard"))
@@ -414,6 +518,7 @@ def create_app(role: str | None = None, services: Services | None = None) -> Fla
         MAX_CONTENT_LENGTH=16 * 1024,
     )
     app.extensions["greenhouse"] = services
+    app.extensions["greenhouse_listings"] = {}
     csrf.init_app(app)
 
     if role == "worker":

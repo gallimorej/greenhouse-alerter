@@ -15,8 +15,9 @@ class AppConfig:
     reassert_after: timedelta = timedelta(minutes=30)
     ifttt_on_event: str = "start_greenhouse_fans"
     ifttt_off_event: str = "stop_greenhouse_fans"
-    # Admin-side SensorPush calls per minute; the worker's one call per tick is on top of this.
-    sensorpush_admin_calls_per_minute: int = 4
+    # The worker fetches a sample this often and reuses the last one in between. Three minutes leaves
+    # the admin pages a window between fetches that is at least a minute from each.
+    sensor_poll_interval: timedelta = timedelta(minutes=3)
 
     def event_for(self, on: bool) -> str:
         return self.ifttt_on_event if on else self.ifttt_off_event
@@ -39,6 +40,8 @@ def to_dict(config: AppConfig) -> dict:
     data = {k: v for k, v in asdict(config).items() if k != "controller"}
     data["reassert_after_minutes"] = config.reassert_after.total_seconds() / 60
     del data["reassert_after"]
+    data["sensor_poll_minutes"] = config.sensor_poll_interval.total_seconds() / 60
+    del data["sensor_poll_interval"]
     data["controller"] = controller
     return data
 
@@ -60,10 +63,11 @@ def from_dict(data: dict | None) -> AppConfig:
         kwargs[f.name] = value
     config = AppConfig(controller=Settings(**kwargs))
     updates = {}
-    for key in ("actuation_enabled", "active_sensor_id", "ifttt_on_event", "ifttt_off_event",
-                "sensorpush_admin_calls_per_minute"):
+    for key in ("actuation_enabled", "active_sensor_id", "ifttt_on_event", "ifttt_off_event"):
         if key in data:
             updates[key] = data[key]
     if "reassert_after_minutes" in data:
         updates["reassert_after"] = timedelta(minutes=data["reassert_after_minutes"])
+    if "sensor_poll_minutes" in data:
+        updates["sensor_poll_interval"] = timedelta(minutes=data["sensor_poll_minutes"])
     return replace(config, **updates)

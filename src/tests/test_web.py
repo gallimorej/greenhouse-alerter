@@ -152,9 +152,16 @@ def test_reconcile_sets_uncertain(admin, store):
 
 # --- sensor linking -------------------------------------------------------------------------
 
-def test_sensors_page_lists_account_sensors_and_gateways(admin):
+def test_sensors_page_lists_sensors_then_gateways_a_minute_later(admin, clock, sensors):
     page = admin.get("/admin/sensors", headers=ADMIN).get_data(as_text=True)
-    assert "Greenhouse HTP.xw" in page and "HTP.xw" in page and "Greenhouse Gateway" in page
+    assert "Greenhouse HTP.xw" in page and "HTP.xw" in page
+    assert "Greenhouse Gateway" not in page and "Reload in a minute" in page
+    clock.advance(minutes=1)
+    page = admin.get("/admin/sensors", headers=ADMIN).get_data(as_text=True)
+    assert "Greenhouse HTP.xw" in page and "Greenhouse Gateway" in page
+    assert sensors.calls == 2  # the sensor list came from the cache
+    # One granted call is one HTTP attempt: admin pages never retry.
+    assert all(p.attempts == 1 and not p.reauth_retry for p in sensors.policies)
 
 
 def test_link_flow_shows_live_reading_then_links(admin, store):
@@ -176,11 +183,31 @@ def test_stale_sensor_cannot_be_linked(admin, store, sensors):
 
 
 def test_sensor_without_samples_cannot_be_linked(admin, store):
+    post(admin, "/admin/sensors/test", {"sensor_id": "nope"})
     post(admin, "/admin/sensors/link", {"sensor_id": "nope"})
     assert store.get_config().active_sensor_id is None
 
 
+def test_link_without_a_passed_test_is_refused(admin, store, sensors):
+    post(admin, "/admin/sensors/link", {"sensor_id": "s1"})
+    assert store.get_config().active_sensor_id is None and sensors.calls == 0
+
+
+def test_link_test_for_another_sensor_does_not_count(admin, store):
+    post(admin, "/admin/sensors/test", {"sensor_id": "s1"})
+    post(admin, "/admin/sensors/link", {"sensor_id": "s2"})
+    assert store.get_config().active_sensor_id is None
+
+
+def test_expired_link_test_is_refused(admin, store, clock):
+    post(admin, "/admin/sensors/test", {"sensor_id": "s1"})
+    clock.advance(minutes=6)
+    post(admin, "/admin/sensors/link", {"sensor_id": "s1"})
+    assert store.get_config().active_sensor_id is None
+
+
 def test_unlink(admin, store, clock):
+    post(admin, "/admin/sensors/test", {"sensor_id": "s1"})
     post(admin, "/admin/sensors/link", {"sensor_id": "s1"})
     clock.advance(seconds=1)
     post(admin, "/admin/sensors/unlink")
@@ -189,12 +216,11 @@ def test_unlink(admin, store, clock):
 
 
 def test_admin_sensorpush_calls_are_capped(admin, sensors):
-    for _ in range(2):  # 2 calls per sensors page; the cap is 4 a minute
-        admin.get("/admin/sensors", headers=ADMIN)
+    admin.get("/admin/sensors", headers=ADMIN)  # spends this minute's one call
     calls = sensors.calls
-    page = admin.get("/admin/sensors", headers=ADMIN).get_data(as_text=True)
+    page = post(admin, "/admin/sensors/test", {"sensor_id": "s1"}).get_data(as_text=True)
     assert sensors.calls == calls
-    assert "rate limit" in page
+    assert "one request a minute" in page and "rate limited" in page
 
 
 # --- helpers --------------------------------------------------------------------------------

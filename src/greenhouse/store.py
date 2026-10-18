@@ -23,10 +23,27 @@ OVERRIDE = "config/override"
 CONTROLLER = "controller/state"
 STATUS = "controller/status"
 BUDGET = "sensorpush/budget"
+LINK_CHECK = "sensorpush/link_check"
 EVENTS = "events"
 
 # Longer than the 7-day history chart, which overlays fan commands from these events.
 EVENT_RETENTION = timedelta(days=90)
+
+# SensorPush asks for no more than one API request a minute. It's a constant, not a setting, so no
+# stored value can raise it. Both services share it, over any rolling BUDGET_WINDOW.
+SENSORPUSH_CALLS_PER_MINUTE = 1
+BUDGET_WINDOW = timedelta(seconds=60)
+# Ticks run about a minute apart, so a fetch is due slightly before a full interval has passed.
+POLL_SLACK = timedelta(seconds=15)
+# If the worker hasn't fetched for this long past its interval (no sensor linked, job paused), it
+# isn't running, and the admin pages stop yielding to it.
+WORKER_IDLE_AFTER = timedelta(minutes=2)
+
+# Event queries read in pages. EVENTS_MAX is above the most commands 7 days can hold at the 30 s
+# minimum dispatch spacing (20,160), so the history chart's range is always complete.
+EVENT_PAGE = 500
+EVENTS_MAX = 25_000
+EVENT_SCAN = 5_000
 
 Docs = dict[str, dict | None]
 Writes = dict[str, dict]
@@ -64,8 +81,12 @@ class Store:
     def recent_events(self, limit: int = 20) -> list[dict]:
         raise NotImplementedError
 
-    def events_since(self, start: datetime, limit: int = 2000) -> list[dict]:
-        """Events at or after ``start``, oldest first."""
+    def events_since(self, start: datetime) -> list[dict]:
+        """Every event at or after ``start``, oldest first, read in pages (up to EVENTS_MAX)."""
+        raise NotImplementedError
+
+    def last_event_before(self, start: datetime, kind: str) -> dict | None:
+        """The newest event of ``kind`` before ``start``, looking back at most EVENT_SCAN events."""
         raise NotImplementedError
 
     # --- reads ------------------------------------------------------------------------------
@@ -96,11 +117,15 @@ class Store:
         actor: str,
         kind: str,
         now: datetime,
-        detail: dict | None = None,
+        detail: dict | Callable[[AppConfig, AppConfig], dict] | None = None,
     ) -> AppConfig:
+        """Apply ``change`` to the latest config. ``detail`` may be a function of (old, new), so the
+        audit event describes exactly what this transaction replaced."""
+
         def write(d):
-            config = change(appconfig.from_dict(d[CONFIG]))
-            path, event = _event(kind, actor, now, detail)
+            old = appconfig.from_dict(d[CONFIG])
+            config = change(old)
+            path, event = _event(kind, actor, now, detail(old, config) if callable(detail) else detail)
             return {CONFIG: appconfig.to_dict(config), path: event}, config
 
         return self._transact([CONFIG], write)
@@ -135,21 +160,43 @@ class Store:
     # --- SensorPush call budget -------------------------------------------------------------
 
     def consume_sensorpush_call(self, caller: str, now: datetime) -> bool:
-        """Count a call in the current minute. The worker always may; admin pages share a cap."""
+        """Take one SensorPush call from the shared cap, if it's this caller's turn.
+
+        The cap counts calls in any rolling 60 seconds, not per clock minute. The worker may call
+        only once its poll interval has passed. While the worker is running, an admin call that
+        would leave no room for the worker's next fetch is refused, so admin pages can't starve the
+        controller of readings.
+        """
 
         def write(d):
-            minute = now.strftime("%Y-%m-%dT%H:%M")
-            budget = d[BUDGET] if d[BUDGET] and d[BUDGET].get("minute") == minute else {
-                "minute": minute, "worker": 0, "admin": 0
-            }
-            if caller == "admin":
-                cap = appconfig.from_dict(d[CONFIG]).sensorpush_admin_calls_per_minute
-                if budget["admin"] >= cap:
+            config = appconfig.from_dict(d[CONFIG])
+            budget = d[BUDGET] or {}
+            recent = [t for t in budget.get("recent", []) if now - t < BUDGET_WINDOW]
+            if len(recent) >= SENSORPUSH_CALLS_PER_MINUTE:
+                return {}, False
+            last_worker = budget.get("last_worker_at")
+            since = None if last_worker is None else now - last_worker
+            worker_due = since is None or since >= config.sensor_poll_interval - POLL_SLACK
+            if caller == "worker" and not worker_due:
+                return {}, False
+            worker_running = since is not None and since < config.sensor_poll_interval + WORKER_IDLE_AFTER
+            if caller == "admin" and worker_running:
+                next_fetch = last_worker + config.sensor_poll_interval - POLL_SLACK
+                fills_cap = len(recent) + 1 >= SENSORPUSH_CALLS_PER_MINUTE
+                if fills_cap and next_fetch - now < BUDGET_WINDOW:
                     return {}, False
-            budget = dict(budget, **{caller: budget[caller] + 1})
+            budget = {
+                "recent": recent + [now],
+                "last_worker_at": now if caller == "worker" else last_worker,
+            }
             return {BUDGET: budget}, True
 
         return self._transact([BUDGET, CONFIG], write)
+
+    def record_link_check(self, sensor_id: str, reading: dict, actor: str, now: datetime) -> None:
+        """Remember a passed link test, so confirming it doesn't spend another SensorPush call."""
+        doc = {"sensor_id": sensor_id, "reading": reading, "actor": actor, "checked_at": now}
+        self._transact([], lambda d: ({LINK_CHECK: doc}, None))
 
     # --- worker tick ------------------------------------------------------------------------
 
@@ -261,10 +308,16 @@ class MemoryStore(Store):
             events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/")]
         return sorted(events, key=lambda e: e["at"], reverse=True)[:limit]
 
-    def events_since(self, start, limit=2000):
+    def events_since(self, start):
         with self._lock:
             events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/") and d["at"] >= start]
-        return sorted(events, key=lambda e: e["at"])[:limit]
+        return sorted(events, key=lambda e: e["at"])[:EVENTS_MAX]
+
+    def last_event_before(self, start, kind):
+        with self._lock:
+            events = [d for p, d in self.docs.items() if p.startswith(f"{EVENTS}/") and d["at"] < start]
+        newest = sorted(events, key=lambda e: e["at"], reverse=True)[:EVENT_SCAN]
+        return next((e for e in newest if e.get("kind") == kind), None)
 
 
 class FirestoreStore(Store):
@@ -300,13 +353,35 @@ class FirestoreStore(Store):
         )
         return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]
 
-    def events_since(self, start, limit=2000):
+    def _pages(self, query, cap):
+        """Stream ``query`` in pages of EVENT_PAGE, up to ``cap`` documents."""
+        seen, last = 0, None
+        while seen < cap:
+            page = query.limit(min(EVENT_PAGE, cap - seen))
+            if last is not None:
+                page = page.start_after(last)
+            snaps = list(page.stream(timeout=self._timeout_s))
+            for snap in snaps:
+                yield snap.to_dict()
+            seen += len(snaps)
+            if len(snaps) < EVENT_PAGE:
+                return
+            last = snaps[-1]
+
+    def events_since(self, start):
         from google.cloud.firestore_v1.base_query import FieldFilter
 
+        query = self._client.collection(EVENTS).where(filter=FieldFilter("at", ">=", start)).order_by("at")
+        return list(self._pages(query, EVENTS_MAX))
+
+    def last_event_before(self, start, kind):
+        from google.cloud import firestore
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        # Filtered here rather than by the query, which would need a composite (kind, at) index.
         query = (
             self._client.collection(EVENTS)
-            .where(filter=FieldFilter("at", ">=", start))
-            .order_by("at")
-            .limit(limit)
+            .where(filter=FieldFilter("at", "<", start))
+            .order_by("at", direction=firestore.Query.DESCENDING)
         )
-        return [snap.to_dict() for snap in query.stream(timeout=self._timeout_s)]
+        return next((e for e in self._pages(query, EVENT_SCAN) if e.get("kind") == kind), None)

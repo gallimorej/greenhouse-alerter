@@ -64,6 +64,17 @@ def on_periods(events: list[dict], start: datetime, end: datetime) -> list[tuple
     return [(a, b) for a, b in periods if b > start and a < end]
 
 
+def _runs(buckets: list[Bucket]) -> list[list[Bucket]]:
+    """Split buckets wherever an empty bucket (no samples) falls between two."""
+    runs: list[list[Bucket]] = []
+    for b in buckets:
+        if runs and runs[-1][-1].end == b.start:
+            runs[-1].append(b)
+        else:
+            runs.append([b])
+    return runs
+
+
 LABEL_GAP = 14  # px between label baselines in the right margin
 
 
@@ -144,8 +155,15 @@ def render(
         parts.append(f'<text class="threshold-label" x="{PAD_LEFT + plot_w + 6}" y="{y(value) + 4:.1f}">{name} {value:g}°</text>')
 
     if buckets:
-        points = " ".join(f"{x(b.start + (b.end - b.start) / 2):.1f},{y(b.avg_f):.1f}" for b in buckets)
-        parts.append(f'<polyline class="temp-line" points="{points}"/>')
+        # One line per run of consecutive buckets, so a sensor outage shows as a gap, not a straight
+        # line across it. A lone bucket is a dot.
+        for run in _runs(buckets):
+            pts = [(x(b.start + (b.end - b.start) / 2), y(b.avg_f)) for b in run]
+            if len(pts) == 1:
+                parts.append(f'<circle class="temp-dot" cx="{pts[0][0]:.1f}" cy="{pts[0][1]:.1f}" r="2"/>')
+            else:
+                points = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+                parts.append(f'<polyline class="temp-line" points="{points}"/>')
         last = buckets[-1]
         lx, ly = x(last.start + (last.end - last.start) / 2), y(last.avg_f)
         parts.append(f'<circle class="temp-end" cx="{lx:.1f}" cy="{ly:.1f}" r="4"/>')

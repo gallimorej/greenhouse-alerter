@@ -19,7 +19,7 @@ Rules, in precedence order:
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from zoneinfo import ZoneInfo
 
@@ -110,13 +110,23 @@ def in_active_hours(local: datetime, settings: Settings) -> bool:
     return t >= start or t < end
 
 
-def next_cycle_start(now: datetime, settings: Settings) -> datetime:
-    """The next local wall-clock minute (after ``now``) at which a cycle begins."""
-    local = now.astimezone(ZoneInfo(settings.timezone)).replace(second=0, microsecond=0)
-    minute_of_day = local.hour * 60 + local.minute
-    into_interval = (minute_of_day - settings.cycle_offset_minutes) % settings.cycle_interval_minutes
-    candidate = local + timedelta(minutes=settings.cycle_interval_minutes - into_interval)
-    return candidate.astimezone(now.tzinfo)
+def next_cycle_start(now: datetime, settings: Settings) -> datetime | None:
+    """The next minute after ``now`` at which a cycle begins, or None when cycles are off.
+
+    Steps through real minutes rather than adding to local time, so a repeated or skipped hour at a
+    daylight-saving change gives the cycle that actually runs next.
+    """
+    if settings.cycle_duration_minutes == 0:
+        return None
+    zone = ZoneInfo(settings.timezone)
+    t = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    for _ in range(settings.cycle_interval_minutes + 61):  # one interval, plus a DST hour
+        t += timedelta(minutes=1)
+        local = t.astimezone(zone)
+        minute_of_day = local.hour * 60 + local.minute
+        if (minute_of_day - settings.cycle_offset_minutes) % settings.cycle_interval_minutes == 0:
+            return t.astimezone(now.tzinfo)
+    return None
 
 
 def in_cycle(local: datetime, settings: Settings) -> bool:

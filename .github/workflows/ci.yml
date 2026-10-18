@@ -68,9 +68,10 @@ jobs:
 
     - name: Run worker tests against the emulator
       run: |
+        set -o pipefail
         gcloud emulators firestore start --host-port=127.0.0.1:8085 > emulator.log 2>&1 &
         for i in $(seq 1 60); do curl -sf http://127.0.0.1:8085 >/dev/null && break; sleep 1; done
-        FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 python -m pytest -v -rs src/tests/test_worker.py | tee result.txt
+        FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 python -m pytest -v -rs src/tests/test_worker.py src/tests/test_store.py | tee result.txt
         # Fail if the emulator variants were skipped rather than run.
         if grep -q SKIPPED result.txt; then echo "emulator tests were skipped"; exit 1; fi
 
