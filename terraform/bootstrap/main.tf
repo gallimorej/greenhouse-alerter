@@ -85,6 +85,19 @@ resource "google_firestore_database" "greenhouse" {
   depends_on = [google_project_service.enabled]
 }
 
+# Audit events carry an expire_at timestamp (set by the app); Firestore deletes them after it passes,
+# typically within a day or so.
+resource "google_firestore_field" "events_ttl" {
+  database   = google_firestore_database.greenhouse.name
+  collection = "events"
+  field      = "expire_at"
+
+  ttl_config {}
+
+  # TTL fields don't need single-field indexes.
+  index_config {}
+}
+
 resource "google_monitoring_notification_channel" "admin_email" {
   display_name = "Greenhouse admin email"
   type         = "email"

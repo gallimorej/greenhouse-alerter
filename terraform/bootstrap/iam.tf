@@ -38,6 +38,7 @@ locals {
     "roles/cloudscheduler.admin",         # the single greenhouse-tick job
     "roles/monitoring.alertPolicyEditor", # Phase 2 alerts
     "roles/logging.configWriter",         # log-based metrics the alerts are built on
+    "roles/monitoring.dashboardEditor",   # the Greenhouse operations dashboard
   ]
 }
 
