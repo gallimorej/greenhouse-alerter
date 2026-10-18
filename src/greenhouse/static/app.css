@@ -10,6 +10,9 @@
   --warn-bg: #fff4d6;
   --error-bg: #fbe3df;
   --info-bg: #e3f0e7;
+  /* Chart: series-1 blue from the dataviz reference palette, validated against each card surface. */
+  --series-1: #2a78d6;
+  --fan-on: #e8e6e0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -25,6 +28,8 @@
     --warn-bg: #3b3218;
     --error-bg: #42221d;
     --info-bg: #1f3427;
+    --series-1: #3987e5;
+    --fan-on: #2c322e;
   }
 }
 
@@ -55,3 +60,43 @@ form.inline { display: inline-block; margin: 0 .5rem .5rem 0; }
 button { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; }
 button.secondary { background: transparent; color: var(--accent); }
 button.danger { background: var(--bad); border-color: var(--bad); }
+
+/* Forms */
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem 1rem; }
+.field { display: flex; flex-direction: column; gap: .25rem; }
+.field span { font-size: .875rem; font-weight: 600; }
+.field input, select { font: inherit; padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; }
+.field.invalid input { border-color: var(--bad); }
+form.override { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+form.override label { display: flex; gap: .4rem; align-items: center; }
+.pending { color: var(--muted); font-style: italic; }
+
+/* Range switch */
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }
+.segmented a { padding: .3rem .9rem; text-decoration: none; color: var(--fg); }
+.segmented a[aria-current="page"] { background: var(--accent); color: var(--card); }
+
+/* Chart */
+svg.chart { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .tick, .chart .threshold-label, .chart .end-label { fill: var(--muted); font-size: 11px; font-family: system-ui, sans-serif; }
+.chart .end-label { fill: var(--fg); font-weight: 600; }
+.chart .threshold { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.chart .fan-on { fill: var(--fan-on); }
+.chart .temp-line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .temp-dot { fill: var(--series-1); }
+.chart .temp-end { fill: var(--series-1); stroke: var(--card); stroke-width: 2; }
+.chart .hit { fill: transparent; }
+.chart .hit:hover { fill: var(--series-1); fill-opacity: .08; }
+.legend { display: flex; align-items: center; gap: .4rem; }
+.key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.fan-on-key { background: var(--fan-on); border: 1px solid var(--line); }
+details summary { cursor: pointer; font-weight: 600; }
+
+/* On phones, keep chart labels readable: the chart keeps a minimum width and scrolls inside its card. */
+@media (max-width: 640px) {
+  svg.chart { min-width: 600px; }
+  /* rtl on the scroller makes it open at the right end (the newest data); the chart itself stays ltr. */
+  .chart-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; direction: rtl; }
+  .chart-scroll svg { direction: ltr; }
+}

@@ -11,6 +11,8 @@
     <a class="brand" href="{{ url_for('admin.dashboard') }}">Greenhouse</a>
     <nav>
       <a href="{{ url_for('admin.dashboard') }}">Status</a>
+      <a href="{{ url_for('admin.history') }}">History</a>
+      <a href="{{ url_for('admin.settings') }}">Settings</a>
       <a href="{{ url_for('admin.sensors') }}">Sensors</a>
     </nav>
     <span class="user">{{ g.user }}</span>

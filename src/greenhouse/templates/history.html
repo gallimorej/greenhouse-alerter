@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}History · Greenhouse{% endblock %}
+{% block content %}
+<h1>Greenhouse temperature</h1>
+<nav class="segmented" aria-label="Range">
+  {% for r in ranges %}
+    <a href="{{ url_for('admin.history', range=r) }}"{% if r == range_key %} aria-current="page"{% endif %}>{{ r }}</a>
+  {% endfor %}
+</nav>
+
+{% if not config.active_sensor_id %}
+  <p class="banner warning">No sensor linked. <a href="{{ url_for('admin.sensors') }}">Link a sensor</a> to see its history.</p>
+{% endif %}
+{% if error %}<p class="banner error">Couldn't load history from SensorPush: {{ error }}</p>{% endif %}
+{% if events_truncated %}<p class="banner warning">This range has more events than the page reads; the newest fan commands may be missing from the chart.</p>{% endif %}
+{% if truncated %}<p class="banner warning">SensorPush returned only part of this range; the oldest samples are missing.</p>{% endif %}
+
+<section class="card">
+  <div class="chart-scroll">{{ chart.svg }}</div>
+  <p class="muted legend"><span class="key fan-on-key"></span> Fans commanded on · dashed lines: thresholds · hover the chart for values</p>
+</section>
+
+<details class="card">
+  <summary>Table view</summary>
+  <table>
+    <thead><tr><th>From</th><th>Average</th><th>Low</th><th>High</th><th>Samples</th></tr></thead>
+    <tbody>
+    {% for b in chart.buckets|reverse %}
+      <tr><td>{{ b.start.astimezone(tz).strftime("%b %d %H:%M") }}</td><td>{{ "%.1f"|format(b.avg_f) }}°F</td>
+          <td>{{ "%.1f"|format(b.min_f) }}</td><td>{{ "%.1f"|format(b.max_f) }}</td><td>{{ b.count }}</td></tr>
+    {% else %}
+      <tr><td colspan="5">No samples.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endblock %}

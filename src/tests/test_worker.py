@@ -272,11 +272,11 @@ def test_admin_pages_stop_yielding_to_an_idle_worker(make):
     assert store.consume_sensorpush_call("admin", NOON + timedelta(minutes=5))
 
 
-def test_cap_above_one_allows_more_calls_a_minute(make):
-    store, *_ = make(sensor_poll_interval=timedelta(minutes=2), sensorpush_calls_per_minute=2)
-    assert store.consume_sensorpush_call("worker", NOON)
+def test_a_stored_cap_cannot_raise_the_limit(store_factory):
+    # An older config document that still carries a cap above one is ignored.
+    store = store_factory({CONFIG: {"sensorpush_calls_per_minute": 5}})
     assert store.consume_sensorpush_call("admin", NOON)
-    assert not store.consume_sensorpush_call("admin", NOON)
+    assert not store.consume_sensorpush_call("admin", NOON + timedelta(seconds=30))
 
 
 def test_worker_sensor_call_is_a_single_request(make):

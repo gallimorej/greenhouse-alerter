@@ -56,6 +56,36 @@
 </section>
 
 <section class="card">
+  <h2>Manual control</h2>
+  {% if override %}
+    <p><strong>Fans {{ "ON" if override.on else "OFF" }}</strong> by hand until {{ override.expires_at|ago_until(now) }}.
+    {% if override_progress == "pending" %}<span class="pending">Pending: the next tick applies it.</span>
+    {% elif override_progress == "sending" %}<span class="pending">Sending the command…</span>
+    {% elif override_progress == "applied" %}<span>Command accepted by IFTTT.</span>
+    {% elif override_progress == "failed" %}<span class="banner error">The command didn't go through ({{ controller.last_command.result }}{% if controller.last_command.http_status %}, HTTP {{ controller.last_command.http_status }}{% endif %}); the next tick resends it.</span>
+    {% elif override_progress == "disabled" %}<span class="banner warning">Not sent: fan control is disabled (shadow mode).</span>
+    {% endif %}</p>
+  {% else %}
+    <p>Automatic.{% if override_progress == "pending" %} <span class="pending">Pending: the next tick applies it.</span>{% endif %}
+      {% if next_cycle %}Next scheduled cycle {{ next_cycle|ago_until(now) }}.{% else %}Scheduled cycles are off.{% endif %}</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('admin.set_override') }}" class="override">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>For
+      <select name="hours">
+        {% for h, label in [("0.25", "15 min"), ("0.5", "30 min"), ("1", "1 hour"), ("2", "2 hours"), ("4", "4 hours"), ("12", "12 hours")] %}
+          <option value="{{ h }}"{% if h == "1" %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button name="mode" value="on">Fans ON</button>
+    <button name="mode" value="off" class="secondary">Fans OFF</button>
+    {% if override %}<button name="mode" value="auto" class="secondary">Back to automatic</button>{% endif %}
+  </form>
+  <p class="muted">Overrides always expire, so a forgotten one can't cook the plants. They apply within a minute and only while fan control is enabled.</p>
+</section>
+
+<section class="card">
   <h2>Controls</h2>
   <form method="post" action="{{ url_for('admin.set_actuation') }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

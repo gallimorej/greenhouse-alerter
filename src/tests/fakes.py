@@ -25,6 +25,7 @@ class FakeSensors:
     age: timedelta = timedelta(minutes=1)
     fail: bool = False
     calls: int = 0
+    history_readings: list[Reading] = field(default_factory=list)
     policies: list = field(default_factory=list)
     listed: list[SensorInfo] = field(default_factory=lambda: [
         SensorInfo("s1", "Greenhouse HTP.xw", "HTP.xw", True, 3.1, -60.0),
@@ -37,6 +38,13 @@ class FakeSensors:
         if self.fail or sensor_id not in self.temps:
             raise SensorUnavailable(f"No samples for sensor {sensor_id}")
         return Reading(sensor_id, self.clock() - self.age, self.temps[sensor_id], 50.0, 29.9)
+
+    def history(self, sensor_id, start, policy=None, limit=12000):
+        self.calls += 1
+        self.policies.append(policy)
+        if self.fail:
+            raise SensorUnavailable("SensorPush /samples returned 503")
+        return list(self.history_readings), False
 
     def sensors(self, policy=None):
         self.calls += 1
