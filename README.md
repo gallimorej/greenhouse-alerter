@@ -21,6 +21,8 @@ greenhouse-admin    Cloud Run behind IAP; status, kill switch, reconcile, sensor
 - **Command safety:** `actuation.py` handles the lease, generations, the pre-dispatch guard and reconcile. A tick that has lost its lease or outlived its budget can't send, and flipping the kill switch stops even a tick already in flight.
 - **Persistence:** `store.py` runs every transition in one transaction, on Firestore in production and in memory in tests.
 - **Failure handling:** a sensor failure leaves the fans as they are and raises an email alert (`terraform/monitoring.tf`).
+- **Observability:** every tick writes one structured log line. Log-based metrics built on those lines drive the alerts and the **Greenhouse** Cloud Monitoring dashboard (`terraform/dashboard.tf`; `terraform output dashboard_url`), which charts temperature, successful and stale ticks, IFTTT failures, worker errors, latency and open alerts.
+- **Retention:** audit events expire after 90 days through a Firestore TTL policy (set up in the bootstrap).
 
 New deployments start in **shadow mode**: decisions are computed and logged, but no commands are sent until fan control is enabled on the admin page.
 
