@@ -18,10 +18,11 @@ terraform plan
 terraform apply
 ```
 
-## Rebuilding from scratch
+## How the first apply was done
 
-The backend in `backend.tf` points at a bucket this stack creates, so a first apply into a new project
-needs the backend set aside until the bucket exists:
+For the record, not a general recipe: this stack is written for the `greenhouse-alerter` project,
+whose three existing secrets it imports, and `backend.tf` names a state bucket the stack itself
+creates. The first apply set the backend aside until the bucket existed:
 
 ```sh
 mv backend.tf backend.tf.next
@@ -53,15 +54,21 @@ gcloud beta services identity create --service=iap.googleapis.com --project gree
 
 ## Manual Console step (no API exists for it)
 
-The project has no organization, so IAP needs an OAuth client before it can admit an outside account:
-Console → Security → Identity-Aware Proxy → configure OAuth → **Auto generate credentials**.
+The project has no organization, so IAP needs a custom OAuth client before it can admit an outside
+account (done 2026-10-18):
+
+1. Google Auth Platform → Branding → Get started: app name, support email, Audience **External**.
+2. Audience → Test users: add each admin account.
+3. Security → Identity-Aware Proxy → **All web services** row → ⋮ → Settings → **Custom OAuth** →
+   **Auto Generate Credentials** → Save. Cloud Run services inherit it from this level; check with
+   `gcloud iap settings get --project greenhouse-alerter --resource-type=iap_web`.
 
 ## GitHub
 
-Set these repository variables (not secrets; they aren't sensitive). The old key-based deploy
-workflow is removed in this change, so nothing deploys yet. The Cloud Run deploy job (added with
-the Cloud Run services) runs only on pushes to `main` and stays skipped until
-`GCP_WORKLOAD_IDENTITY_PROVIDER` is set.
+Set these repository variables (not secrets; they aren't sensitive). The deploy job in
+`.github/workflows/ci.yml` runs on every push to `main` once `GCP_WORKLOAD_IDENTITY_PROVIDER` is set
+(set 2026-10-18), after the test jobs pass. The `production` environment doesn't exist until the first deploy creates it, with no approval rule, so
+a merge to `main` deploys without further approval.
 
 | Variable | Value |
 |---|---|
