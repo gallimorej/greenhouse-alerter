@@ -22,6 +22,8 @@ greenhouse-admin    Cloud Run behind IAP; status, kill switch, reconcile, sensor
 - **Persistence:** `store.py` runs every transition in one transaction, on Firestore in production and in memory in tests.
 - **SensorPush limit:** SensorPush asks for no more than one API request a minute, so both services share one call in any rolling 60 seconds (`sensorpush/budget`), and each granted call is a single HTTP attempt. The worker fetches a sample every 3 minutes and reuses it in between; admin pages get the gap between fetches, cache the sensor and gateway lists, and confirming a sensor link reuses its test reading. Logins aren't counted: two requests per service every 30 minutes, or sooner when SensorPush rejects an expired token. The rejected request isn't repeated; it waits for the next granted call.
 - **Failure handling:** a sensor failure leaves the fans as they are and raises an email alert (`terraform/monitoring.tf`).
+- **Observability:** every tick that completes writes one structured log line (an unexpected exception ends the tick with Cloud Run's error log instead, which the worker-errors alert counts). Log-based metrics built on those lines drive the alerts and the **Greenhouse** Cloud Monitoring dashboard (`terraform/dashboard.tf`; `terraform output dashboard_url`), which charts temperature, successful and stale ticks, IFTTT failures, worker errors, latency and open alerts.
+- **Retention:** audit events expire after 90 days through a Firestore TTL policy (set up in the bootstrap).
 
 New deployments start in **shadow mode**: decisions are computed and logged, but no commands are sent until fan control is enabled on the admin page.
 

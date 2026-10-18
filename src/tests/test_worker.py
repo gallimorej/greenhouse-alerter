@@ -284,3 +284,14 @@ def test_worker_sensor_call_is_a_single_request(make):
     tick(store, sensors, fans, clock)
     (policy,) = sensors.policies
     assert policy.attempts == 1 and not policy.reauth_retry
+
+
+def test_every_event_expires_after_retention(make):
+    from greenhouse.store import EVENT_RETENTION
+
+    store, sensors, fans, clock = make(temp=101)
+    tick(store, sensors, fans, clock)
+    store.add_event("note", "jeff", clock())
+    events = store.recent_events()
+    assert len(events) == 2
+    assert all(e["expire_at"] == e["at"] + EVENT_RETENTION for e in events)

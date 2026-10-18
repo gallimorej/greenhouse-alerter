@@ -26,6 +26,9 @@ BUDGET = "sensorpush/budget"
 LINK_CHECK = "sensorpush/link_check"
 EVENTS = "events"
 
+# Longer than the 7-day history chart, which overlays fan commands from these events.
+EVENT_RETENTION = timedelta(days=90)
+
 # SensorPush asks for no more than one API request a minute. It's a constant, not a setting, so no
 # stored value can raise it. Both services share it, over any rolling BUDGET_WINDOW.
 SENSORPUSH_CALLS_PER_MINUTE = 1
@@ -66,6 +69,8 @@ def _event(kind: str, actor: str, now: datetime, detail: dict | None = None) -> 
         "kind": kind,
         "actor": actor,
         "detail": detail or {},
+        # Firestore's TTL policy on events.expire_at (terraform/bootstrap) deletes the event after this.
+        "expire_at": now + EVENT_RETENTION,
     }
 
 
