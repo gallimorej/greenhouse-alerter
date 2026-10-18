@@ -27,6 +27,7 @@
             <form method="post" action="{{ url_for('admin.test_sensor') }}" class="inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="sensor_id" value="{{ s.id }}">
+              <input type="hidden" name="sensor_name" value="{{ s.name }}">
               <button>Link…</button>
             </form>
           {% endif %}

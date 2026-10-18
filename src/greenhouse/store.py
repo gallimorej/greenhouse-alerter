@@ -250,9 +250,11 @@ class Store:
 
         return self._transact([BUDGET, CONFIG], write)
 
-    def record_link_check(self, sensor_id: str, reading: dict, actor: str, now: datetime) -> None:
+    def record_link_check(
+        self, sensor_id: str, name: str | None, reading: dict, actor: str, now: datetime
+    ) -> None:
         """Remember a passed link test, so confirming it doesn't spend another SensorPush call."""
-        doc = {"sensor_id": sensor_id, "reading": reading, "actor": actor, "checked_at": now}
+        doc = {"sensor_id": sensor_id, "name": name, "reading": reading, "actor": actor, "checked_at": now}
         self._transact([], lambda d: ({LINK_CHECK: doc}, None))
 
     # --- worker tick ------------------------------------------------------------------------
