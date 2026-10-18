@@ -11,7 +11,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from greenhouse import actuation, appconfig
 from greenhouse.actuation import Dispatch, SendCheck
@@ -24,6 +24,9 @@ CONTROLLER = "controller/state"
 STATUS = "controller/status"
 BUDGET = "sensorpush/budget"
 EVENTS = "events"
+
+# Longer than the 7-day history chart, which overlays fan commands from these events.
+EVENT_RETENTION = timedelta(days=90)
 
 Docs = dict[str, dict | None]
 Writes = dict[str, dict]
@@ -49,6 +52,8 @@ def _event(kind: str, actor: str, now: datetime, detail: dict | None = None) -> 
         "kind": kind,
         "actor": actor,
         "detail": detail or {},
+        # Firestore's TTL policy on events.expire_at (terraform/bootstrap) deletes the event after this.
+        "expire_at": now + EVENT_RETENTION,
     }
 
 

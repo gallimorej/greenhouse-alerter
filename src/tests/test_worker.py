@@ -212,3 +212,14 @@ def test_sensorpush_budget_reserves_worker_and_caps_admin(make):
     assert not store.consume_sensorpush_call("admin", now)
     assert store.consume_sensorpush_call("worker", now)
     assert store.consume_sensorpush_call("admin", now + timedelta(minutes=1))
+
+
+def test_every_event_expires_after_retention(make):
+    from greenhouse.store import EVENT_RETENTION
+
+    store, sensors, fans, clock = make(temp=101)
+    tick(store, sensors, fans, clock)
+    store.add_event("note", "jeff", clock())
+    events = store.recent_events()
+    assert len(events) == 2
+    assert all(e["expire_at"] == e["at"] + EVENT_RETENTION for e in events)
