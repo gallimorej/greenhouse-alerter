@@ -5,19 +5,29 @@ what CI needs before CI can run: the remote state bucket, the image repository, 
 deploys (Workload Identity Federation), the service accounts and their grants, the secret
 containers, the Firestore database, admin IAP access, the alert email channel and a budget.
 
-## First apply
+## Applying changes
+
+The bootstrap was first applied on 2026-10-18, and its state is in the
+`greenhouse-alerter-tfstate` bucket (prefix `bootstrap`). From a fresh checkout:
 
 ```sh
 cd terraform/bootstrap
 cp terraform.tfvars.example terraform.tfvars   # fill in admin_email and billing_account_id
 terraform init
-terraform plan    # expect the 3 existing secrets to be imported with no changes
+terraform plan
 terraform apply
 ```
 
-Then move the state into the bucket it just created:
+## Rebuilding from scratch
+
+The backend in `backend.tf` points at a bucket this stack creates, so a first apply into a new project
+needs the backend set aside until the bucket exists:
 
 ```sh
+mv backend.tf backend.tf.next
+terraform init
+terraform plan    # expect the 3 existing secrets to be imported with no changes
+terraform apply
 mv backend.tf.next backend.tf
 terraform init -migrate-state
 terraform plan    # expect "No changes": the state moved intact
