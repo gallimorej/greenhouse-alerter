@@ -42,7 +42,7 @@ The worker tests also run against the Firestore emulator when `FIRESTORE_EMULATO
 
 ```sh
 gcloud emulators firestore start --host-port=127.0.0.1:8085 &
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 python -m pytest src/tests/test_worker.py
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 python -m pytest src/tests/test_worker.py src/tests/test_store.py
 ```
 
 ### Updating dependencies
