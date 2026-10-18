@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Link sensor · Greenhouse{% endblock %}
+{% block content %}
+<h1>Link sensor</h1>
+<p class="mono">{{ sensor_id }}</p>
+
+<section class="card">
+  <h2>Live test reading</h2>
+  {% if reading %}
+    <p class="big">{{ "%.1f"|format(reading.temperature_f) }}°F</p>
+    <p>{% if reading.humidity is not none %}{{ "%.0f"|format(reading.humidity) }}% RH{% endif %}
+       {% if reading.pressure is not none %} · {{ "%.2f"|format(reading.pressure) }} inHg{% endif %}</p>
+    <p>Observed {{ reading.observed_at|ago(now) }}</p>
+  {% else %}
+    <p>No reading.</p>
+  {% endif %}
+</section>
+
+{% if problem %}
+  <p class="banner error">Can't link this sensor: {{ problem }}.</p>
+  <a href="{{ url_for('admin.sensors') }}">Back to sensors</a>
+{% else %}
+  <form method="post" action="{{ url_for('admin.link_sensor') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="sensor_id" value="{{ sensor_id }}">
+    <button>Confirm: control the fans from this sensor</button>
+    <a href="{{ url_for('admin.sensors') }}">Cancel</a>
+  </form>
+{% endif %}
+{% endblock %}

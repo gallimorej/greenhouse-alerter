@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Greenhouse{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header>
+    <a class="brand" href="{{ url_for('admin.dashboard') }}">Greenhouse</a>
+    <nav>
+      <a href="{{ url_for('admin.dashboard') }}">Status</a>
+      <a href="{{ url_for('admin.sensors') }}">Sensors</a>
+    </nav>
+    <span class="user">{{ g.user }}</span>
+  </header>
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <p class="banner {{ category }}">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

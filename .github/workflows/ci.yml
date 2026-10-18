@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+env:
+  PROJECT_ID: greenhouse-alerter
+  REGION: us-east1
+  IMAGE: us-east1-docker.pkg.dev/greenhouse-alerter/greenhouse/app
+  TERRAFORM_VERSION: '1.16.6'
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -33,5 +39,130 @@ jobs:
     - name: Audit dependencies
       run: python -m pip_audit --strict --require-hashes -r requirements.txt
 
-  # The deploy job (Workload Identity Federation, needs: test, main pushes only) arrives with the
-  # Cloud Run services in Phase 2.
+  # The worker tick tests again, against real Firestore transactions in the emulator.
+  firestore:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: Set up Java
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      with:
+        distribution: temurin
+        java-version: '21'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      with:
+        install_components: 'beta,cloud-firestore-emulator'
+
+    - name: Install dependencies
+      run: python -m pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+
+    - name: Run worker tests against the emulator
+      run: |
+        set -o pipefail
+        gcloud emulators firestore start --host-port=127.0.0.1:8085 > emulator.log 2>&1 &
+        for i in $(seq 1 60); do curl -sf http://127.0.0.1:8085 >/dev/null && break; sleep 1; done
+        FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 python -m pytest -v -rs src/tests/test_worker.py | tee result.txt
+        # Fail if the emulator variants were skipped rather than run.
+        if grep -q SKIPPED result.txt; then echo "emulator tests were skipped"; exit 1; fi
+
+    - name: Emulator log
+      if: failure()
+      run: cat emulator.log
+
+  image:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Build image
+      run: docker build -t greenhouse:ci .
+
+    - name: Fails fast without configuration
+      run: |
+        out=$(docker run --rm -e ROLE=worker greenhouse:ci timeout 10 gunicorn --bind :8080 "greenhouse.web:create_app()" 2>&1 || true)
+        echo "$out" | grep -q "missing environment for worker"
+
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+    - name: Format and validate
+      run: |
+        terraform fmt -check -recursive
+        for dir in terraform terraform/bootstrap; do
+          [ -d "$dir" ] || continue
+          terraform -chdir="$dir" init -backend=false -input=false
+          terraform -chdir="$dir" validate
+        done
+
+  deploy:
+    needs: [test, firestore, image, terraform]
+    # Main pushes only, and only once the bootstrap has been applied and its outputs are set as
+    # repository variables.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Authenticate to Google Cloud (keyless)
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+    - name: Build and push image
+      id: image
+      run: |
+        gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+        docker build -t "${IMAGE}:${GITHUB_SHA}" .
+        docker push "${IMAGE}:${GITHUB_SHA}"
+        digest=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_SHA}")
+        echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+    - name: Terraform apply
+      working-directory: terraform
+      env:
+        TF_VAR_image: ${{ steps.image.outputs.digest }}
+        TF_VAR_admin_emails: ${{ vars.ADMIN_EMAILS }}
+        TF_VAR_notification_channel: ${{ vars.GCP_NOTIFICATION_CHANNEL }}
+      run: |
+        terraform init -input=false
+        terraform apply -input=false -auto-approve

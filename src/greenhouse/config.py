@@ -1,31 +1,62 @@
-"""Secrets, loaded once at startup.
+"""Environment and secrets, loaded once at startup.
 
-A missing project or secret raises ConfigError, so a misconfigured service fails at boot instead of on
-the first request.
+A missing setting or secret raises ConfigError, so a misconfigured service fails at boot instead of on
+the first request. Each role loads only the secrets it uses: the admin service never reads the IFTTT key.
 """
 
 import os
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
 
-SECRET_IDS = ("SENSORPUSH_USER", "SENSORPUSH_PASSWORD", "IFTTT_KEY")
+ROLE_SECRETS = {
+    "worker": ("SENSORPUSH_USER", "SENSORPUSH_PASSWORD", "IFTTT_KEY"),
+    "admin": ("SENSORPUSH_USER", "SENSORPUSH_PASSWORD", "FLASK_SECRET_KEY"),
+}
+
+
+ROLE_ENV = {
+    "worker": ("PROJECT_ID", "FIRESTORE_DATABASE", "WORKER_AUDIENCE", "SCHEDULER_SERVICE_ACCOUNT"),
+    "admin": ("PROJECT_ID", "FIRESTORE_DATABASE", "IAP_AUDIENCE", "ADMIN_EMAILS"),
+}
 
 
 class ConfigError(Exception):
     pass
 
 
-@dataclass(frozen=True)
-class Secrets:
-    sensorpush_user: str = field(repr=False)
-    sensorpush_password: str = field(repr=False)
-    ifttt_key: str = field(repr=False)
+def require_env(role: str) -> None:
+    missing = [name for name in ROLE_ENV[role] if not os.environ.get(name)]
+    if missing:
+        raise ConfigError(f"missing environment for {role}: {', '.join(missing)}")
+
+
+class Secrets(Mapping):
+    """A read-only mapping whose repr never shows values."""
+
+    def __init__(self, values: dict[str, str]):
+        self._values = dict(values)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def __repr__(self):
+        return f"Secrets({sorted(self._values)})"
+
+
+def env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ConfigError(f"{name} is not set")
+    return value
 
 
 def project_id() -> str:
-    value = os.environ.get("PROJECT_ID")
-    if not value:
-        raise ConfigError("PROJECT_ID is not set")
-    return value
+    return env("PROJECT_ID")
 
 
 def read_secret(client, project: str, secret_id: str) -> str:
@@ -40,15 +71,10 @@ def read_secret(client, project: str, secret_id: str) -> str:
     return value
 
 
-def load_secrets(client=None, project: str | None = None) -> Secrets:
+def load_secrets(secret_ids: Iterable[str], client=None, project: str | None = None) -> Secrets:
+    project = project or project_id()
     if client is None:
         from google.cloud import secretmanager
 
         client = secretmanager.SecretManagerServiceClient()
-    project = project or project_id()
-    values = {secret_id: read_secret(client, project, secret_id) for secret_id in SECRET_IDS}
-    return Secrets(
-        sensorpush_user=values["SENSORPUSH_USER"],
-        sensorpush_password=values["SENSORPUSH_PASSWORD"],
-        ifttt_key=values["IFTTT_KEY"],
-    )
+    return Secrets({secret_id: read_secret(client, project, secret_id) for secret_id in secret_ids})
