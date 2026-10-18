@@ -12,6 +12,7 @@
   <p class="banner warning">No sensor linked. <a href="{{ url_for('admin.sensors') }}">Link a sensor</a> to see its history.</p>
 {% endif %}
 {% if error %}<p class="banner error">Couldn't load history from SensorPush: {{ error }}</p>{% endif %}
+{% if events_truncated %}<p class="banner warning">This range has more events than the page reads; the newest fan commands may be missing from the chart.</p>{% endif %}
 {% if truncated %}<p class="banner warning">SensorPush returned only part of this range; the oldest samples are missing.</p>{% endif %}
 
 <section class="card">

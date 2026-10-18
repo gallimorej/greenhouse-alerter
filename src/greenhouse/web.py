@@ -24,7 +24,7 @@ from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier,
 from greenhouse.fans import IftttClient
 from greenhouse.sensors import CallPolicy, SensorPushClient, SensorSource, SensorUnavailable
 from greenhouse.models import Reading
-from greenhouse.store import LINK_CHECK, Store
+from greenhouse.store import EVENTS_MAX, LINK_CHECK, Store
 from greenhouse.worker import run_tick
 
 log = logging.getLogger(__name__)
@@ -164,12 +164,12 @@ def override_progress(
     """
     if changed_at is None:
         return None
+    if override is not None and not actuation_enabled:
+        return "disabled"  # shadow mode never sends it, so don't say a tick will
     if not status or status.get("updated_at") is None or status["updated_at"] <= changed_at:
         return "pending"
     if override is None:
         return None
-    if not actuation_enabled:
-        return "disabled"
     last = doc.last_command
     if last is not None and last.on == override.on and last.result in RESEND_RESULTS - {"pending"}:
         return "failed"
@@ -221,16 +221,20 @@ def save_settings():
             reassert_after=new.reassert_after,
             ifttt_on_event=new.ifttt_on_event,
             ifttt_off_event=new.ifttt_off_event,
-            sensorpush_calls_per_minute=new.sensorpush_calls_per_minute,
             sensor_poll_interval=new.sensor_poll_interval,
         )
 
+    committed = {}
+
     def audit(old, saved):
         # Against the config this transaction actually replaced, not the one the form was built on.
-        return {"changed": forms.settings_diff(old, saved)}
+        # A retried transaction calls this again, so the last call is the one that committed.
+        committed["diff"] = forms.settings_diff(old, saved)
+        return {"changed": committed["diff"]}
 
     s.store.update_config(apply, g.user, "settings_changed", s.now(), audit)
-    flash(f"Saved: {', '.join(sorted(diff))}. The next tick uses them.", "info")
+    changed = ", ".join(sorted(committed["diff"])) or "nothing new (already saved)"
+    flash(f"Saved: {changed}. The next tick uses them.", "info")
     return redirect(url_for("admin.settings"))
 
 
@@ -265,7 +269,9 @@ def history():
     # when the range starts.
     before = s.store.last_event_before(start, "command_accepted")
     events = [before] if before else []
-    events += [e for e in s.store.events_since(start) if e.get("kind") == "command_accepted"]
+    in_range = s.store.events_since(start)
+    events += [e for e in in_range if e.get("kind") == "command_accepted"]
+    events_truncated = len(in_range) >= EVENTS_MAX
     chart = render_chart(
         readings, events, start, now, config.controller.high_f, config.controller.low_f, config.controller.timezone
     )
@@ -277,6 +283,7 @@ def history():
         ranges=list(HISTORY_RANGES),
         chart=chart,
         truncated=truncated,
+        events_truncated=events_truncated,
         error=error,
         tz=ZoneInfo(config.controller.timezone),
     )

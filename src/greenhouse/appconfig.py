@@ -15,9 +15,6 @@ class AppConfig:
     reassert_after: timedelta = timedelta(minutes=30)
     ifttt_on_event: str = "start_greenhouse_fans"
     ifttt_off_event: str = "stop_greenhouse_fans"
-    # SensorPush asks for no more than one API request a minute, so this cap, over any rolling
-    # 60 seconds, is shared by the worker and the admin pages.
-    sensorpush_calls_per_minute: int = 1
     # The worker fetches a sample this often and reuses the last one in between. Three minutes leaves
     # the admin pages a window between fetches that is at least a minute from each.
     sensor_poll_interval: timedelta = timedelta(minutes=3)
@@ -66,8 +63,7 @@ def from_dict(data: dict | None) -> AppConfig:
         kwargs[f.name] = value
     config = AppConfig(controller=Settings(**kwargs))
     updates = {}
-    for key in ("actuation_enabled", "active_sensor_id", "ifttt_on_event", "ifttt_off_event",
-                "sensorpush_calls_per_minute"):
+    for key in ("actuation_enabled", "active_sensor_id", "ifttt_on_event", "ifttt_off_event"):
         if key in data:
             updates[key] = data[key]
     if "reassert_after_minutes" in data:

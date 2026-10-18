@@ -26,6 +26,9 @@ BUDGET = "sensorpush/budget"
 LINK_CHECK = "sensorpush/link_check"
 EVENTS = "events"
 
+# SensorPush asks for no more than one API request a minute. It's a constant, not a setting, so no
+# stored value can raise it. Both services share it, over any rolling BUDGET_WINDOW.
+SENSORPUSH_CALLS_PER_MINUTE = 1
 BUDGET_WINDOW = timedelta(seconds=60)
 # Ticks run about a minute apart, so a fetch is due slightly before a full interval has passed.
 POLL_SLACK = timedelta(seconds=15)
@@ -164,7 +167,7 @@ class Store:
             config = appconfig.from_dict(d[CONFIG])
             budget = d[BUDGET] or {}
             recent = [t for t in budget.get("recent", []) if now - t < BUDGET_WINDOW]
-            if len(recent) >= config.sensorpush_calls_per_minute:
+            if len(recent) >= SENSORPUSH_CALLS_PER_MINUTE:
                 return {}, False
             last_worker = budget.get("last_worker_at")
             since = None if last_worker is None else now - last_worker
@@ -174,7 +177,7 @@ class Store:
             worker_running = since is not None and since < config.sensor_poll_interval + WORKER_IDLE_AFTER
             if caller == "admin" and worker_running:
                 next_fetch = last_worker + config.sensor_poll_interval - POLL_SLACK
-                fills_cap = len(recent) + 1 >= config.sensorpush_calls_per_minute
+                fills_cap = len(recent) + 1 >= SENSORPUSH_CALLS_PER_MINUTE
                 if fills_cap and next_fetch - now < BUDGET_WINDOW:
                     return {}, False
             budget = {

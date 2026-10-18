@@ -28,7 +28,6 @@ def test_round_trip_preserves_every_field():
         actuation_enabled=True,
         active_sensor_id="s1",
         reassert_after=timedelta(minutes=45),
-        sensorpush_calls_per_minute=2,
         sensor_poll_interval=timedelta(minutes=3),
     )
     data = appconfig.to_dict(config)

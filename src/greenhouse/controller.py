@@ -19,7 +19,7 @@ Rules, in precedence order:
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from zoneinfo import ZoneInfo
 
@@ -119,13 +119,13 @@ def next_cycle_start(now: datetime, settings: Settings) -> datetime | None:
     if settings.cycle_duration_minutes == 0:
         return None
     zone = ZoneInfo(settings.timezone)
-    t = now.replace(second=0, microsecond=0)
+    t = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
     for _ in range(settings.cycle_interval_minutes + 61):  # one interval, plus a DST hour
         t += timedelta(minutes=1)
         local = t.astimezone(zone)
         minute_of_day = local.hour * 60 + local.minute
         if (minute_of_day - settings.cycle_offset_minutes) % settings.cycle_interval_minutes == 0:
-            return t
+            return t.astimezone(now.tzinfo)
     return None
 
 

@@ -66,7 +66,7 @@ SETTINGS_FORM = {
     "cycle_interval_minutes": "60", "cycle_offset_minutes": "10", "cycle_duration_minutes": "3",
     "stale_after_minutes": "15", "reassert_after_minutes": "45",
     "ifttt_on_event": "start_greenhouse_fans", "ifttt_off_event": "stop_greenhouse_fans",
-    "sensorpush_calls_per_minute": "1", "sensor_poll_minutes": "4",
+    "sensor_poll_minutes": "4",
 }
 
 
@@ -78,7 +78,7 @@ def test_parse_settings_builds_new_config():
     assert new.controller.high_f == 98 and new.controller.active_start == time(6, 30)
     assert new.controller.stale_after == timedelta(minutes=15)
     assert new.reassert_after == timedelta(minutes=45)
-    assert new.sensorpush_calls_per_minute == 1 and new.sensor_poll_interval == timedelta(minutes=4)
+    assert new.sensor_poll_interval == timedelta(minutes=4)
 
 
 @pytest.mark.parametrize(
@@ -154,6 +154,15 @@ def test_next_cycle_runs_in_the_repeated_hour_when_dst_ends():
     assert nxt.astimezone(NY).strftime("%H:%M %Z") == "01:05 EST"
 
 
+def test_next_cycle_is_the_same_for_a_local_time_caller():
+    first_105 = datetime(2026, 11, 1, 5, 5, tzinfo=timezone.utc)
+    local_now = (first_105 + timedelta(minutes=10)).astimezone(NY)
+    nxt = next_cycle_start(local_now, Settings())
+    # Compared in UTC: Python never equates a fold=1 local time with another zone (PEP 495).
+    assert nxt.astimezone(timezone.utc) == datetime(2026, 11, 1, 6, 5, tzinfo=timezone.utc)
+    assert nxt.tzinfo == local_now.tzinfo
+
+
 def test_next_cycle_skips_the_missing_hour_when_dst_starts():
     # 2026-03-08: 02:00-02:59 doesn't exist in New York; after 01:05 EST the next is 03:05 EDT.
     nxt = next_cycle_start(datetime(2026, 3, 8, 6, 30, tzinfo=timezone.utc), Settings())
@@ -210,6 +219,19 @@ def test_settings_audit_records_the_value_actually_replaced(admin, store, clock)
     assert event["actor"] == "jeff@x" and event["detail"]["changed"]["high_f"] == [105.0, 98.0]
 
 
+def test_settings_flash_names_the_fields_actually_changed(admin, store, clock):
+    csrf = token(admin, "/admin/settings")
+    # Someone else saves the same form first; this save then changes nothing.
+    admin.post("/admin/settings", data=dict(SETTINGS_FORM, csrf_token=csrf), headers=ADMIN)
+    clock.advance(seconds=1)
+    store.update_config(lambda c: c, "other", "noop", clock())
+    with admin.session_transaction() as session:
+        session.pop("_flashes", None)
+    admin.post("/admin/settings", data=dict(SETTINGS_FORM | {"high_f": "97"}, csrf_token=csrf), headers=ADMIN)
+    page = admin.get("/admin/settings", headers=ADMIN).get_data(as_text=True)
+    assert "Saved: high_f." in page
+
+
 def test_settings_require_csrf(admin, store):
     assert admin.post("/admin/settings", data=SETTINGS_FORM, headers=ADMIN).status_code == 400
 
@@ -253,6 +275,9 @@ def test_failed_override_command_is_shown(admin, store, clock):
 def test_override_while_fan_control_is_disabled_says_not_sent(admin, store, clock):
     store.update_config(lambda c: c.__class__(**{**c.__dict__, "actuation_enabled": False}), "x", "actuation_disabled", clock())
     post(admin, "/admin/override", {"mode": "on", "hours": "1"})
+    page = admin.get("/admin/", headers=ADMIN).get_data(as_text=True)
+    # Straight away, before any tick: shadow mode will never send it.
+    assert "Not sent: fan control is disabled" in page and "Pending" not in page
     _after_tick(store, clock, ControllerDoc())
     page = admin.get("/admin/", headers=ADMIN).get_data(as_text=True)
     assert "Not sent: fan control is disabled" in page
@@ -323,6 +348,15 @@ def test_history_includes_the_newest_commands_in_a_busy_week(admin, store, clock
         store.add_event("command_accepted", "worker", at, {"on": i % 2 == 0})
     page = admin.get("/admin/history?range=7d", headers=ADMIN).get_data(as_text=True)
     assert page.count('class="fan-on"') == 1_200
+
+
+def test_history_warns_when_events_hit_the_read_limit(admin, store, clock, monkeypatch):
+    monkeypatch.setattr("greenhouse.web.EVENTS_MAX", 3)
+    monkeypatch.setattr("greenhouse.store.EVENTS_MAX", 3)
+    for i in range(5):
+        store.add_event("command_accepted", "worker", clock() - timedelta(hours=i + 1), {"on": True})
+    page = admin.get("/admin/history?range=24h", headers=ADMIN).get_data(as_text=True)
+    assert "newest fan commands may be missing" in page
 
 
 def test_chart_breaks_the_line_across_missing_samples():
