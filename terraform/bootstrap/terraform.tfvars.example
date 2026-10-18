@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+admin_email        = "you@example.com"
+billing_account_id = "000000-000000-000000"
