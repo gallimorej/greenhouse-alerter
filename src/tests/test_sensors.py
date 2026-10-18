@@ -68,6 +68,14 @@ def test_reading_without_pressure_is_fine():
         {},
         {"sensors": {"s1": [{"observed": "2026-07-15T16:20:00Z"}]}},
         {"sensors": {"s1": [sample(temperature="n/a")]}},
+        {"sensors": {"s1": [sample(observed=None)]}},
+        {"sensors": {"s1": [sample(observed="")]}},
+        {"sensors": {"s1": [sample(observed=1752596400)]}},
+        {"sensors": {"s1": [sample(observed="2026-07-15T16:20:00")]}},
+        {"sensors": {"s1": [{k: v for k, v in sample().items() if k != "observed"}]}},
+        {"sensors": {"s1": ["not-a-sample"]}},
+        {"sensors": {"s1": {"not": "a list"}}},
+        {"sensors": ["s1"]},
     ],
 )
 @responses.activate
@@ -155,3 +163,32 @@ def test_sensors_and_gateways_listing():
     assert sensors["s2"].battery_voltage is None and sensors["s2"].type is None
     (gateway,) = client.gateways(ONE_SHOT)
     assert gateway.last_seen == datetime(2026, 7, 15, 16, 19, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"body": "<html>Bad gateway</html>", "content_type": "text/html"}, {"json": ["a", "list"]}],
+)
+@responses.activate
+def test_successful_but_unparseable_response_raises_sensor_unavailable(kwargs):
+    mock_login(responses)
+    responses.post(f"{API_BASE}/samples", status=200, **kwargs)
+    with pytest.raises(SensorUnavailable):
+        SensorPushClient("e@x", "pw").latest_reading("s1", ONE_SHOT)
+
+
+@responses.activate
+def test_login_response_without_token_raises_sensor_unavailable():
+    responses.post(f"{API_BASE}/oauth/authorize", json={"authorization": "auth-code"})
+    responses.post(f"{API_BASE}/oauth/accesstoken", json={"unexpected": True})
+    with pytest.raises(SensorUnavailable):
+        SensorPushClient("e@x", "pw").latest_reading("s1", ONE_SHOT)
+
+
+@pytest.mark.parametrize("method, path", [("sensors", "/devices/sensors"), ("gateways", "/devices/gateways")])
+@responses.activate
+def test_malformed_device_listings_raise_sensor_unavailable(method, path):
+    mock_login(responses)
+    responses.post(f"{API_BASE}{path}", json={"id-1": "not-an-object"})
+    with pytest.raises(SensorUnavailable):
+        getattr(SensorPushClient("e@x", "pw"), method)(ONE_SHOT)

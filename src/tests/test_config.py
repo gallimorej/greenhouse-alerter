@@ -26,7 +26,7 @@ def test_loads_all_secrets_and_strips_whitespace():
 
 def test_repr_hides_secret_values():
     s = load_secrets(FakeSecretClient(ALL), project="p")
-    assert "pw" not in repr(s) and "'k'" not in repr(s)
+    assert "u@x" not in repr(s) and "pw" not in repr(s) and "'k'" not in repr(s)
 
 
 def test_missing_secret_raises_config_error():

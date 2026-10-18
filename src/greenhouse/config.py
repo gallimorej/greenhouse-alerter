@@ -16,7 +16,7 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Secrets:
-    sensorpush_user: str
+    sensorpush_user: str = field(repr=False)
     sensorpush_password: str = field(repr=False)
     ifttt_key: str = field(repr=False)
 
