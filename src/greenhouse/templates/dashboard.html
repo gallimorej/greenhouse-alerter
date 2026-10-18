@@ -40,7 +40,12 @@
     {% else %}
       <p class="big">—</p>
     {% endif %}
-    <p class="muted">Sensor {{ config.active_sensor_id or "not linked" }}</p>
+    {% if config.active_sensor_id %}
+      {% if config.active_sensor_name %}<p>{{ config.active_sensor_name }}</p>{% endif %}
+      <p class="muted mono">{{ config.active_sensor_id }}</p>
+    {% else %}
+      <p class="muted">Sensor not linked</p>
+    {% endif %}
   </div>
 
   <div class="card">

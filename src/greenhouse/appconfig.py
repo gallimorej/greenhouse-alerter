@@ -12,6 +12,8 @@ class AppConfig:
     # Off until someone turns it on: a fresh deployment runs in shadow mode.
     actuation_enabled: bool = False
     active_sensor_id: str | None = None
+    # Display only, from the SensorPush listing when the sensor was linked; the worker uses the ID.
+    active_sensor_name: str | None = None
     reassert_after: timedelta = timedelta(minutes=30)
     ifttt_on_event: str = "start_greenhouse_fans"
     ifttt_off_event: str = "stop_greenhouse_fans"
@@ -75,6 +77,7 @@ def from_dict(data: dict | None) -> AppConfig:
     for key in (
         "actuation_enabled",
         "active_sensor_id",
+        "active_sensor_name",
         "ifttt_on_event",
         "ifttt_off_event",
         "control_enabled",

@@ -2,6 +2,7 @@
 {% block title %}Link sensor · Greenhouse{% endblock %}
 {% block content %}
 <h1>Link sensor</h1>
+{% if sensor_name %}<p>{{ sensor_name }}</p>{% endif %}
 <p class="mono">{{ sensor_id }}</p>
 
 <section class="card">

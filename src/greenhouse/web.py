@@ -112,6 +112,7 @@ def require_iap_user():
 ADMIN_CALL = CallPolicy(timeout_s=10.0, attempts=1, reauth_retry=False)
 # How long a passed link test stays valid for confirming it.
 LINK_CHECK_VALID = timedelta(minutes=5)
+SENSOR_NAME_MAX = 100
 # Account sensor and gateway listings are cached, so with one SensorPush call a minute a reload can
 # fetch what the last load couldn't.
 LISTING_TTL = timedelta(minutes=3)
@@ -459,12 +460,19 @@ def test_sensor():
     sensor_id = request.form.get("sensor_id", "").strip()
     if not sensor_id:
         abort(400)
+    # From the Sensors page's listing; display only.
+    name = request.form.get("sensor_name", "").strip()[:SENSOR_NAME_MAX] or None
     s = services()
     reading, problem = _fresh_reading(sensor_id)
     if problem is None:
-        s.store.record_link_check(sensor_id, _reading_doc(reading), g.user, s.now())
+        s.store.record_link_check(sensor_id, name, _reading_doc(reading), g.user, s.now())
     return render_template(
-        "link_confirm.html", now=s.now(), sensor_id=sensor_id, reading=reading, problem=problem
+        "link_confirm.html",
+        now=s.now(),
+        sensor_id=sensor_id,
+        sensor_name=name,
+        reading=reading,
+        problem=problem,
     )
 
 
@@ -477,21 +485,21 @@ def _reading_doc(reading: Reading) -> dict:
     }
 
 
-def _passed_link_check(sensor_id: str) -> tuple[dict | None, str | None]:
-    """(reading, problem) from this admin's own recent link test, checked again against now."""
+def _passed_link_check(sensor_id: str) -> tuple[dict | None, str | None, str | None]:
+    """(reading, name, problem) from this admin's own recent link test, checked again against now."""
     s = services()
     check = s.store.read_raw(LINK_CHECK)
     now = s.now()
     if not check or check["sensor_id"] != sensor_id or check["actor"] != g.user:
-        return None, "test the sensor first"
+        return None, None, "test the sensor first"
     if now - check["checked_at"] > LINK_CHECK_VALID:
-        return None, "the test reading has expired; test the sensor again"
+        return None, None, "the test reading has expired; test the sensor again"
     reading = check["reading"]
     stale_after = s.store.get_config().controller.stale_after
     observed = Reading(sensor_id, reading["observed_at"], reading["temperature_f"])
     if not controller.is_fresh(observed, now, stale_after):
-        return None, "the test reading is no longer fresh; test the sensor again"
-    return reading, None
+        return None, None, "the test reading is no longer fresh; test the sensor again"
+    return reading, check.get("name"), None
 
 
 @admin_bp.post("/sensors/link")
@@ -502,17 +510,22 @@ def link_sensor():
         abort(400)
     # Checked against the server-side record of the test, not trusted from the confirm page; that saves
     # a second SensorPush call.
-    reading, problem = _passed_link_check(sensor_id)
+    reading, name, problem = _passed_link_check(sensor_id)
     if problem:
         flash(f"Not linked: {problem}.", "error")
         return redirect(url_for("admin.sensors"))
     previous = s.store.get_config().active_sensor_id
     s.store.update_config(
-        lambda c: replace(c, active_sensor_id=sensor_id),
+        lambda c: replace(c, active_sensor_id=sensor_id, active_sensor_name=name),
         g.user,
         "sensor_linked",
         s.now(),
-        {"sensor_id": sensor_id, "previous": previous, "temperature_f": reading["temperature_f"]},
+        {
+            "sensor_id": sensor_id,
+            "sensor_name": name,
+            "previous": previous,
+            "temperature_f": reading["temperature_f"],
+        },
     )
     flash("Sensor linked. The next tick will use it.", "info")
     return redirect(url_for("admin.dashboard"))
@@ -523,7 +536,7 @@ def unlink_sensor():
     s = services()
     previous = s.store.get_config().active_sensor_id
     s.store.update_config(
-        lambda c: replace(c, active_sensor_id=None),
+        lambda c: replace(c, active_sensor_id=None, active_sensor_name=None),
         g.user,
         "sensor_unlinked",
         s.now(),
