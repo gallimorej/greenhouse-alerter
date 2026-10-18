@@ -277,10 +277,10 @@ def test_override_while_fan_control_is_disabled_says_not_sent(admin, store, cloc
     post(admin, "/admin/override", {"mode": "on", "hours": "1"})
     page = admin.get("/admin/", headers=ADMIN).get_data(as_text=True)
     # Straight away, before any tick: shadow mode will never send it.
-    assert "Not sent: fan control is disabled" in page and "Pending" not in page
+    assert "Not sent: commands are stopped" in page and "Pending" not in page
     _after_tick(store, clock, ControllerDoc())
     page = admin.get("/admin/", headers=ADMIN).get_data(as_text=True)
-    assert "Not sent: fan control is disabled" in page
+    assert "Not sent: commands are stopped" in page
 
 
 def test_dashboard_says_when_cycles_are_off(admin, store, clock):

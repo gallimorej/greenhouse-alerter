@@ -60,6 +60,11 @@ form.inline { display: inline-block; margin: 0 .5rem .5rem 0; }
 button { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--card); cursor: pointer; }
 button.secondary { background: transparent; color: var(--accent); }
 button.danger { background: var(--bad); border-color: var(--bad); }
+button[disabled] { opacity: .5; cursor: not-allowed; }
+table.switches { margin-bottom: .75rem; }
+table.switches th { width: 40%; }
+table.switches td { vertical-align: middle; }
+table.switches form.inline { margin: 0; }
 
 /* Forms */
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem 1rem; }

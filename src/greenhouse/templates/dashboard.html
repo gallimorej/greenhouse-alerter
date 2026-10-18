@@ -3,11 +3,24 @@
 {% block content %}
 {% set reading = status.reading %}
 
-{% if not config.active_sensor_id %}
-  <p class="banner error">No sensor linked. Temperature control is frozen; scheduled cycles continue.
-    <a href="{{ url_for('admin.sensors') }}">Link a sensor</a></p>
-{% elif status and not status.sensor_fresh %}
-  <p class="banner error">The linked sensor has no fresh reading{% if status.sensor_error %} ({{ status.sensor_error }}){% endif %}. Temperature control is frozen.</p>
+{% set settings = config.controller %}
+{% if not config.control_enabled %}
+  <p class="banner warning">Control is paused for the season: nothing is sent, the fans stay as they are, and the sensor isn't read.</p>
+  {% if not config.alerts_in_sync %}
+    <p class="banner error">Alerts aren't silenced yet; the worker retries every minute.</p>
+  {% endif %}
+{% else %}
+  {% if not config.alerts_in_sync %}
+    <p class="banner error">Alerts may still be snoozed after the resume; the worker retries every minute. Check Monitoring → Alerting → Snoozes for "greenhouse-season-pause".</p>
+  {% endif %}
+  {% if not settings.temperature_control_enabled %}
+    {# No temperature demand to keep, so a missing or stale sensor isn't a problem. #}
+  {% elif not config.active_sensor_id %}
+    <p class="banner error">No sensor linked. Temperature control is frozen; scheduled cycles continue.
+      <a href="{{ url_for('admin.sensors') }}">Link a sensor</a></p>
+  {% elif status and not status.paused and not status.sensor_fresh %}
+    <p class="banner error">The linked sensor has no fresh reading{% if status.sensor_error %} ({{ status.sensor_error }}){% endif %}. Temperature control is frozen.</p>
+  {% endif %}
 {% endif %}
 {% if not config.actuation_enabled %}
   <p class="banner warning">Shadow mode: decisions are computed and logged, but no fan commands are sent.</p>
@@ -32,9 +45,13 @@
 
   <div class="card">
     <h2>Desired</h2>
-    {% if status %}
+    {% if status and not status.paused %}
       <p class="big">{{ {True: "ON", False: "OFF", None: "—"}[status.desired_on] }}</p>
       <p>{{ status.reason }}</p>
+      <p class="muted">Updated {{ status.updated_at|ago(now) }}</p>
+    {% elif status and status.paused %}
+      <p class="big">—</p>
+      <p>Paused for the season</p>
       <p class="muted">Updated {{ status.updated_at|ago(now) }}</p>
     {% else %}
       <p>No tick has run yet.</p>
@@ -63,12 +80,14 @@
     {% elif override_progress == "sending" %}<span class="pending">Sending the command…</span>
     {% elif override_progress == "applied" %}<span>Command accepted by IFTTT.</span>
     {% elif override_progress == "failed" %}<span class="banner error">The command didn't go through ({{ controller.last_command.result }}{% if controller.last_command.http_status %}, HTTP {{ controller.last_command.http_status }}{% endif %}); the next tick resends it.</span>
-    {% elif override_progress == "disabled" %}<span class="banner warning">Not sent: fan control is disabled (shadow mode).</span>
+    {% elif override_progress == "paused" %}<span class="banner warning">Not sent: control is paused for the season.</span>
+    {% elif override_progress == "disabled" %}<span class="banner warning">Not sent: commands are stopped (shadow mode).</span>
     {% endif %}</p>
   {% else %}
     <p>Automatic.{% if override_progress == "pending" %} <span class="pending">Pending: the next tick applies it.</span>{% endif %}
       {% if next_cycle %}Next scheduled cycle {{ next_cycle|ago_until(now) }}.{% else %}Scheduled cycles are off.{% endif %}</p>
   {% endif %}
+  {% set paused = not config.control_enabled %}
   <form method="post" action="{{ url_for('admin.set_override') }}" class="override">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>For
@@ -78,30 +97,79 @@
         {% endfor %}
       </select>
     </label>
-    <button name="mode" value="on">Fans ON</button>
-    <button name="mode" value="off" class="secondary">Fans OFF</button>
+    <button name="mode" value="on"{% if paused %} disabled{% endif %}>Fans ON</button>
+    <button name="mode" value="off" class="secondary"{% if paused %} disabled{% endif %}>Fans OFF</button>
     {% if override %}<button name="mode" value="auto" class="secondary">Back to automatic</button>{% endif %}
   </form>
-  <p class="muted">Overrides always expire, so a forgotten one can't cook the plants. They apply within a minute and only while fan control is enabled.</p>
+  <p class="muted">Overrides always expire, so a forgotten one can't cook the plants. They apply within a minute, and only while control is active and commands are live.</p>
 </section>
 
 <section class="card">
   <h2>Controls</h2>
-  <form method="post" action="{{ url_for('admin.set_actuation') }}" class="inline">
+  <table class="switches">
+    <tr>
+      <th>Season</th>
+      <td>{{ "Active" if config.control_enabled else "Paused" }}</td>
+      <td>
+        <form method="post" action="{{ url_for('admin.set_season') }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {% if config.control_enabled %}
+            <input type="hidden" name="active" value="off">
+            <button class="secondary">Pause for the season</button>
+          {% else %}
+            <input type="hidden" name="active" value="on">
+            <button>Resume control</button>
+          {% endif %}
+        </form>
+      </td>
+    </tr>
+    {% for name, field, label in [("cycles", "cycles_enabled", "Hourly cycle"), ("temperature", "temperature_control_enabled", "Temperature control")] %}
+    {% set on = settings[field] %}
+    <tr>
+      <th>{{ label }}</th>
+      <td>{{ "On" if on else "Off" }}</td>
+      <td>
+        <form method="post" action="{{ url_for('admin.set_switch', name=name) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enabled" value="{{ 'off' if on else 'on' }}">
+          <button class="secondary">Turn {{ "off" if on else "on" }}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    <tr>
+      <th>Commands</th>
+      <td>{{ "Live" if config.actuation_enabled else "Shadow" }}</td>
+      <td>
+        <form method="post" action="{{ url_for('admin.set_actuation') }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {% if config.actuation_enabled %}
+            <input type="hidden" name="enabled" value="off">
+            <button class="danger">Emergency stop (shadow mode)</button>
+          {% else %}
+            <input type="hidden" name="enabled" value="on">
+            <button>Send commands</button>
+          {% endif %}
+        </form>
+      </td>
+    </tr>
+  </table>
+  {% if config.control_enabled and not settings.cycles_enabled and not settings.temperature_control_enabled %}
+    <p class="banner warning">Both the hourly cycle and temperature control are off, so the fans are held off. To send nothing at all, pause for the season.</p>
+  {% endif %}
+  <p class="muted">Pausing for the season leaves the fans as they are and silences every alert; resuming sends the desired state on the next tick.
+    The emergency stop sends nothing but keeps computing decisions and alerting.</p>
+  {% if not config.alerts_in_sync %}
+  <form method="post" action="{{ url_for('admin.reconcile_alerts') }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {% if config.actuation_enabled %}
-      <input type="hidden" name="enabled" value="off">
-      <button class="danger">Disable fan control</button>
-    {% else %}
-      <input type="hidden" name="enabled" value="on">
-      <button>Enable fan control</button>
-    {% endif %}
+    <button>Fix alerts now</button>
   </form>
+  {% endif %}
   <form method="post" action="{{ url_for('admin.reconcile') }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="secondary">Reconcile</button>
   </form>
-  <p class="muted">Rollback: pause the greenhouse-tick job, disable fan control, wait 90 s, then reconcile.</p>
+  <p class="muted">Rollback: pause the greenhouse-tick job, use the emergency stop, wait 90 s, then reconcile.</p>
 </section>
 
 <section class="card">

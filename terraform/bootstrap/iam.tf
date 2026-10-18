@@ -45,6 +45,19 @@ resource "google_project_iam_member" "runtime_firestore" {
   }
 }
 
+# Both runtimes: snooze the alert policies while the season is paused (src/greenhouse/alerts.py).
+# Snoozes don't change the policies themselves, which stay owned by the main configuration.
+resource "google_project_iam_member" "runtime_snooze" {
+  for_each = {
+    worker = google_service_account.worker.email
+    admin  = google_service_account.admin.email
+  }
+
+  project = var.project_id
+  role    = "roles/monitoring.snoozeEditor"
+  member  = "serviceAccount:${each.value}"
+}
+
 # Deploy: permanent least-privilege grants for the main configuration.
 locals {
   deploy_project_roles = [

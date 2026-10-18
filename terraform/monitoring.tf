@@ -1,13 +1,15 @@
 # Log-based metrics over the worker's structured tick logs (src/greenhouse/worker.py), and email
 # alerts on them. The sensor fail-safe is "leave the fans and alert", so these are what tells Jeff.
+# Pausing for the season snoozes all four (src/greenhouse/alerts.py); with temperature control off, a
+# stale reading doesn't count.
 
 locals {
   worker_logs = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"greenhouse-worker\""
 
   log_metrics = {
     tick_errors    = "${local.worker_logs} AND severity>=ERROR"
-    stale_ticks    = "${local.worker_logs} AND jsonPayload.event=\"tick\" AND jsonPayload.sensor_fresh=false"
-    ok_ticks       = "${local.worker_logs} AND jsonPayload.event=\"tick\" AND jsonPayload.outcome=(\"planned\" OR \"sent\")"
+    stale_ticks    = "${local.worker_logs} AND jsonPayload.event=\"tick\" AND jsonPayload.sensor_fresh=false AND jsonPayload.temperature_control=true"
+    ok_ticks       = "${local.worker_logs} AND jsonPayload.event=\"tick\" AND jsonPayload.outcome=(\"planned\" OR \"sent\" OR \"paused\")"
     ifttt_failures = "${local.worker_logs} AND jsonPayload.event=\"tick\" AND jsonPayload.outcome=\"failed\""
   }
 }
@@ -54,7 +56,7 @@ resource "google_monitoring_alert_policy" "stale_reading" {
   notification_channels = [var.notification_channel]
 
   documentation {
-    content = "The linked sensor has had no reading newer than the stale limit (20 min by default), or no sensor is linked. Temperature control is frozen; scheduled cycles continue. Check the sensor and gateway in the admin Sensors page."
+    content = "The linked sensor has had no reading newer than the stale limit (20 min by default), or no sensor is linked, while temperature control is on. Temperature control is frozen; scheduled cycles continue. Check the sensor and gateway in the admin Sensors page, or turn temperature control off on the dashboard."
   }
 
   conditions {

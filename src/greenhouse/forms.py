@@ -73,7 +73,13 @@ def parse_settings(form, current: AppConfig) -> tuple[AppConfig | None, dict[str
     if errors:
         return None, errors
     try:
-        settings = Settings(**values, stale_after=timedelta(minutes=stale))
+        settings = Settings(
+            **values,
+            stale_after=timedelta(minutes=stale),
+            # The dashboard switches own these; the form keeps whatever they're set to.
+            cycles_enabled=current.controller.cycles_enabled,
+            temperature_control_enabled=current.controller.temperature_control_enabled,
+        )
     except Exception as exc:  # Settings validates cross-field rules (low < high, cycle fits, timezone)
         return None, {"form": str(exc) or type(exc).__name__}
     return replace(

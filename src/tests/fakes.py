@@ -1,6 +1,7 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+from greenhouse.alerts import SNOOZE_NAME, AlertsError, Snooze
 from greenhouse.fans import IftttError
 from greenhouse.models import Reading
 from greenhouse.sensors import SensorInfo, GatewayInfo, SensorUnavailable
@@ -77,3 +78,35 @@ class FakeFans:
 
 def utc(*args):
     return datetime(*args, tzinfo=timezone.utc)
+
+
+@dataclass
+class FakeSnoozes:
+    """The Cloud Monitoring snoozes API, in memory."""
+
+    snoozes: list[Snooze] = field(default_factory=list)
+    fail: bool = False
+    # The POST lands but its response is lost, as with a timeout after the server committed.
+    lose_create_response: bool = False
+    created: list[tuple] = field(default_factory=list)
+
+    def list(self, timeout_s):
+        if self.fail:
+            raise AlertsError("snooze GET returned 503")
+        return list(self.snoozes)
+
+    def create(self, policies, start, end, timeout_s):
+        if self.fail:
+            raise AlertsError("snooze POST returned 503")
+        self.created.append(tuple(policies))
+        self.snoozes.append(Snooze(f"projects/p/snoozes/{len(self.snoozes) + 1}", SNOOZE_NAME, start, end))
+        if self.lose_create_response:
+            raise AlertsError("snooze POST failed: ReadTimeout")
+
+    def end(self, snooze, end, timeout_s):
+        if self.fail:
+            raise AlertsError("snooze PATCH returned 503")
+        self.snoozes = [replace(s, end=end) if s.name == snooze.name else s for s in self.snoozes]
+
+    def running(self, now):
+        return [s for s in self.snoozes if s.display_name == SNOOZE_NAME and s.start <= now < s.end]

@@ -20,6 +20,7 @@ from greenhouse import config as envconfig
 from greenhouse import controller, forms
 from greenhouse.chart import render as render_chart
 from greenhouse.actuation import ACCEPTED, RESEND_RESULTS, ControllerDoc, LeaseHeld
+from greenhouse.alerts import MonitoringSnoozes, Snoozer
 from greenhouse.auth import AuthError, IapVerifier, SchedulerVerifier, Verifier, parse_allowlist
 from greenhouse.fans import IftttClient
 from greenhouse.sensors import CallPolicy, SensorPushClient, SensorSource, SensorUnavailable
@@ -52,6 +53,8 @@ class Services:
     fans: IftttClient | None = None
     secret_key: str | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    # None leaves the alert snoozes alone (local runs); the alerts stay marked out of sync.
+    alerts: Snoozer | None = None
 
 
 csrf = CSRFProtect()
@@ -83,7 +86,7 @@ def require_scheduler():
 @worker_bp.post("/tasks/tick")
 def tick():
     s = services()
-    result = run_tick(s.store, s.sensors, s.fans, now=s.now)
+    result = run_tick(s.store, s.sensors, s.fans, now=s.now, alerts=s.alerts)
     return {"outcome": result.outcome}, 200
 
 
@@ -136,34 +139,48 @@ def dashboard():
     override = data["override"]
     if override is not None and override.expires_at <= now:
         override = None
+    config = data["config"]
     progress = override_progress(
-        override, data["override_changed_at"], status, data["controller"], data["config"].actuation_enabled
+        override,
+        data["override_changed_at"],
+        status,
+        data["controller"],
+        config.actuation_enabled,
+        config.control_enabled,
     )
     return render_template(
         "dashboard.html",
         now=now,
-        config=data["config"],
+        config=config,
         controller=data["controller"],
         status=status,
         override=override,
         override_progress=progress,
-        next_cycle=controller.next_cycle_start(now, data["config"].controller),
+        next_cycle=controller.next_cycle_start(now, config.controller),
         events=s.store.recent_events(15),
     )
 
 
 def override_progress(
-    override, changed_at: datetime | None, status: dict, doc: ControllerDoc, actuation_enabled: bool
+    override,
+    changed_at: datetime | None,
+    status: dict,
+    doc: ControllerDoc,
+    actuation_enabled: bool,
+    control_enabled: bool = True,
 ) -> str | None:
     """Where a manual change stands, judged from the command record rather than tick timestamps.
 
-    pending: no tick since the change. disabled: fan control is off, so nothing is sent.
+    pending: no tick since the change. paused: the season is paused, so nothing is sent.
+    disabled: commands are off (shadow mode), so nothing is sent.
     applied: the last accepted command matches the override. failed: the command for it didn't go
     through and will be resent. sending: a tick has run but no matching command is accepted yet.
     None: nothing to report (no recent change, or back to automatic and a tick has run).
     """
     if changed_at is None:
         return None
+    if override is not None and not control_enabled:
+        return "paused"
     if override is not None and not actuation_enabled:
         return "disabled"  # shadow mode never sends it, so don't say a tick will
     if not status or status.get("updated_at") is None or status["updated_at"] <= changed_at:
@@ -184,7 +201,9 @@ def set_override():
     s = services()
     now = s.now()
     mode, expires_at, error = forms.parse_override(request.form, now)
-    if error:
+    if mode in ("on", "off") and not s.store.get_config().control_enabled:
+        flash("Control is paused for the season. Resume it to run the fans from here.", "error")
+    elif error:
         flash(error, "error")
     elif mode == "auto":
         s.store.clear_override(g.user, now)
@@ -214,10 +233,14 @@ def save_settings():
         return redirect(url_for("admin.settings"))
 
     def apply(latest):
-        # Only the fields this form owns; the kill switch and sensor link keep their latest values.
+        # Only the fields this form owns; the switches and sensor link keep their latest values.
         return replace(
             latest,
-            controller=new.controller,
+            controller=replace(
+                new.controller,
+                cycles_enabled=latest.controller.cycles_enabled,
+                temperature_control_enabled=latest.controller.temperature_control_enabled,
+            ),
             reassert_after=new.reassert_after,
             ifttt_on_event=new.ifttt_on_event,
             ifttt_off_event=new.ifttt_off_event,
@@ -299,7 +322,73 @@ def set_actuation():
         "actuation_enabled" if enabled else "actuation_disabled",
         s.now(),
     )
-    flash(f"Fan control {'enabled' if enabled else 'disabled (shadow mode)'}.", "info")
+    flash(f"Commands {'live' if enabled else 'stopped (shadow mode)'}.", "info")
+    return redirect(url_for("admin.dashboard"))
+
+
+@admin_bp.post("/season")
+def set_season():
+    s = services()
+    active = request.form.get("active") == "on"
+    if not s.store.set_control_enabled(active, g.user, s.now()):
+        flash(f"Control is already {'active' if active else 'paused'}.", "info")
+        return redirect(url_for("admin.dashboard"))
+    alerts_synced = _reconcile_alerts()
+    if active:
+        flash(
+            "Control resumed. The next tick sends the desired state."
+            + ("" if alerts_synced else " Alerts may still be snoozed; the worker keeps retrying."),
+            "info" if alerts_synced else "warning",
+        )
+    else:
+        flash(
+            "Control paused for the season: nothing is sent and the fans stay as they are."
+            + (" Alerts are silenced." if alerts_synced else " Alerts aren't silenced yet; the worker keeps retrying."),
+            "info" if alerts_synced else "warning",
+        )
+    return redirect(url_for("admin.dashboard"))
+
+
+def _reconcile_alerts() -> bool:
+    s = services()
+    if s.alerts is None:
+        return False
+    try:
+        return s.alerts.reconcile(s.store, s.now())
+    except Exception:  # a Firestore error in begin/finish; the worker retries every tick
+        log.exception("alert snooze reconcile failed")
+        return False
+
+
+@admin_bp.post("/alerts/reconcile")
+def reconcile_alerts():
+    if _reconcile_alerts():
+        flash("Alerts match the season switch.", "info")
+    else:
+        flash("Couldn't update the alert snoozes. The worker keeps retrying every minute.", "warning")
+    return redirect(url_for("admin.dashboard"))
+
+
+SWITCHES = {
+    "cycles": ("cycles_enabled", "Hourly cycle"),
+    "temperature": ("temperature_control_enabled", "Temperature control"),
+}
+
+
+@admin_bp.post("/switch/<name>")
+def set_switch(name):
+    if name not in SWITCHES:
+        abort(404)
+    field, label = SWITCHES[name]
+    s = services()
+    enabled = request.form.get("enabled") == "on"
+    s.store.update_config(
+        lambda c: replace(c, controller=replace(c.controller, **{field: enabled})),
+        g.user,
+        f"{name}_{'enabled' if enabled else 'disabled'}",
+        s.now(),
+    )
+    flash(f"{label} {'on' if enabled else 'off'}. The next tick uses it.", "info")
     return redirect(url_for("admin.dashboard"))
 
 
@@ -477,10 +566,12 @@ def build_services(role: str) -> Services:
         project=envconfig.project_id(), database=envconfig.env("FIRESTORE_DATABASE")
     )
     sensors = SensorPushClient(secrets["SENSORPUSH_USER"], secrets["SENSORPUSH_PASSWORD"])
+    alerts = Snoozer(MonitoringSnoozes(envconfig.project_id()), envconfig.alert_policies())
     if role == "worker":
         return Services(
             store=FirestoreStore(client),
             sensors=sensors,
+            alerts=alerts,
             fans=IftttClient(secrets["IFTTT_KEY"]),
             verifier=SchedulerVerifier(
                 audience=envconfig.env("WORKER_AUDIENCE"),
@@ -491,6 +582,7 @@ def build_services(role: str) -> Services:
         store=FirestoreStore(client),
         sensors=sensors,
         secret_key=secrets["FLASK_SECRET_KEY"],
+        alerts=alerts,
         verifier=IapVerifier(
             audience=envconfig.env("IAP_AUDIENCE"),
             allowed_emails=parse_allowlist(envconfig.env("ADMIN_EMAILS")),

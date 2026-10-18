@@ -7,15 +7,21 @@ sensor, a database or IFTTT, so every rule can be table-tested.
 Rules, in precedence order:
 
 1. Temperature demand (hysteresis):
-   a. Outside active hours: off. Temperature control is off at night, even if the reading is stale.
-   b. Inside active hours with no fresh reading: frozen at its previous value.
-   c. Inside active hours with a fresh reading: on above ``high_f``, off below ``low_f``, otherwise
+   a. Temperature control switched off: off.
+   b. Outside active hours: off. Temperature control is off at night, even if the reading is stale.
+   c. Inside active hours with no fresh reading: frozen at its previous value.
+   d. Inside active hours with a fresh reading: on above ``high_f``, off below ``low_f``, otherwise
       unchanged.
-2. Cycle demand: on during the scheduled cycle window, around the clock, with or without a reading.
+2. Cycle demand: on during the scheduled cycle window, around the clock, with or without a reading,
+   unless cycles are switched off.
 3. Desired state:
    a. An unexpired manual override wins.
-   b. Before the first fresh reading ever (not yet baselined), send nothing.
+   b. With temperature control on, before the first fresh reading ever (not yet baselined), send
+      nothing. With it off there's no temperature demand to guess, so cycles run without a reading.
    c. Otherwise, cycle demand OR temperature demand.
+
+The season switch (all control off) isn't a rule here: the worker doesn't call ``decide`` at all while
+the season is paused.
 """
 
 from dataclasses import dataclass, replace
@@ -41,6 +47,9 @@ class Settings:
     cycle_offset_minutes: int = 5
     cycle_duration_minutes: int = 2
     stale_after: timedelta = timedelta(minutes=20)
+    # Owned by the dashboard switches, not the settings form.
+    cycles_enabled: bool = True
+    temperature_control_enabled: bool = True
 
     def __post_init__(self):
         if not self.low_f < self.high_f:
@@ -81,6 +90,7 @@ class Reason(str, Enum):
     COOL = "below the low threshold"
     NIGHT = "outside active hours"
     STALE = "no fresh reading, temperature demand frozen"
+    TEMP_OFF = "temperature control off"
 
 
 @dataclass(frozen=True)
@@ -116,7 +126,7 @@ def next_cycle_start(now: datetime, settings: Settings) -> datetime | None:
     Steps through real minutes rather than adding to local time, so a repeated or skipped hour at a
     daylight-saving change gives the cycle that actually runs next.
     """
-    if settings.cycle_duration_minutes == 0:
+    if not settings.cycles_enabled or settings.cycle_duration_minutes == 0:
         return None
     zone = ZoneInfo(settings.timezone)
     t = now.astimezone(timezone.utc).replace(second=0, microsecond=0)
@@ -147,9 +157,12 @@ def decide(
     local = now.astimezone(ZoneInfo(settings.timezone))
     fresh = is_fresh(reading, now, settings.stale_after)
     active = in_active_hours(local, settings)
-    cycling = in_cycle(local, settings)
+    cycling = settings.cycles_enabled and in_cycle(local, settings)
+    temperature_on = settings.temperature_control_enabled
 
-    if not active:
+    if not temperature_on:
+        temp_demand, temp_reason = False, Reason.TEMP_OFF
+    elif not active:
         temp_demand, temp_reason = False, Reason.NIGHT
     elif not fresh:
         temp_demand, temp_reason = state.temp_demand, Reason.STALE
@@ -164,7 +177,7 @@ def decide(
 
     if override is not None and override.expires_at > now:
         desired, reason = override.on, Reason.OVERRIDE
-    elif not new_state.baselined:
+    elif temperature_on and not new_state.baselined:
         desired, reason = None, Reason.NOT_BASELINED
     elif temp_demand:
         desired, reason = True, temp_reason
